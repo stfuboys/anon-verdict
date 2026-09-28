@@ -285,6 +285,15 @@ def feed_case_status(story):
     return "🟢 Открыто"
 
 
+def story_status_label(status):
+    return {
+        "open": "🟢 Открыто",
+        "closed": "✅ Завершено",
+        "hidden": "🙈 Скрыто модерацией",
+        "deleted": "🗑 Удалено",
+    }.get(status, h(status))
+
+
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
 
@@ -434,12 +443,18 @@ def case_text(story):
             "\n\n🧪 <i>Демонстрационный пример от Anon Verdict. "
             "Это не история реального пользователя.</i>"
         )
+
+    status_line = ""
+    if not story["is_demo"]:
+        status_line = f"\n{story_status_label(story['status'])}"
+
     body = h(story["body"][:3000])
     if len(story["body"]) > 3000:
         body += "…"
+
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
@@ -459,8 +474,9 @@ def case_keyboard(
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
+    status = story["status"]
 
-    if not story["is_demo"] and not own_story:
+    if status == "open" and not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
             callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -468,7 +484,7 @@ def case_keyboard(
 
     if not story["is_demo"]:
         b.button(
-            text="🗣 Обсудить",
+            text="🗣 Обсудить" if status == "open" else "🗣 Обсуждение",
             callback_data=f"discuss:{story['id']}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
@@ -480,10 +496,17 @@ def case_keyboard(
             callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    b.button(
-        text="✅ Сохранено" if favorite else "⭐ Сохранить",
-        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
-    )
+    if own_story and not story["is_demo"] and status in {"open", "closed"}:
+        b.button(
+            text="⚙️ Управление",
+            callback_data=f"life:menu:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+    elif not own_story:
+        b.button(
+            text="✅ Сохранено" if favorite else "⭐ Сохранить",
+            callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+
     b.button(
         text="🧠 Разбор",
         callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -532,8 +555,40 @@ async def render_case(
         )
         return
 
-    favorite = await db.favorite_state(viewer_id, sid)
     own_story = int(story["author_tg_id"]) == int(viewer_id)
+
+    if story["status"] == "deleted":
+        b = InlineKeyboardBuilder()
+        if own_story:
+            b.button(text="⚖️ Мои дела", callback_data="my:0")
+        else:
+            b.button(text="🏛️ В Зал суда", callback_data="feed:0")
+        await safe_edit(
+            message,
+            "🗑 <b>ДЕЛО УДАЛЕНО</b>\n\nЭто дело больше недоступно.",
+            b.as_markup(),
+        )
+        return
+
+    if story["status"] == "hidden":
+        if own_story:
+            b = InlineKeyboardBuilder()
+            b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
+            await safe_edit(
+                message,
+                "🙈 <b>ДЕЛО СКРЫТО МОДЕРАЦИЕЙ</b>\n\n"
+                "Оно не показывается другим пользователям и недоступно для управления.",
+                b.as_markup(),
+            )
+        else:
+            await safe_edit(
+                message,
+                "Это дело сейчас недоступно.",
+                home_inline(viewer_id),
+            )
+        return
+
+    favorite = await db.favorite_state(viewer_id, sid)
 
     await safe_edit(
         message,
@@ -548,6 +603,154 @@ async def render_case(
             own_story=own_story,
         ),
     )
+
+
+async def render_case_management(
+    message,
+    user_id,
+    sid,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+    ):
+        await safe_edit(message, "Управление этим делом недоступно.", home_inline(user_id))
+        return
+
+    status = story["status"]
+    b = InlineKeyboardBuilder()
+
+    if status == "open":
+        b.button(
+            text="✅ Завершить дело",
+            callback_data=f"life:confirm:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="🗑 Удалить дело",
+            callback_data=f"life:confirm:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        info = (
+            "🟢 Сейчас дело открыто.\n"
+            "Пользователи могут оставлять новые советы и писать в обсуждении."
+        )
+    elif status == "closed":
+        b.button(
+            text="🔓 Возобновить дело",
+            callback_data=f"life:do:o:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="🗑 Удалить дело",
+            callback_data=f"life:confirm:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        info = (
+            "✅ Дело завершено.\n"
+            "Старые советы и обсуждение доступны для чтения, "
+            "но новые сообщения и советы закрыты."
+        )
+    elif status == "hidden":
+        b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
+        await safe_edit(
+            message,
+            "🙈 <b>ДЕЛО СКРЫТО МОДЕРАЦИЕЙ</b>\n\n"
+            "Изменить его статус самостоятельно нельзя.",
+            b.as_markup(),
+        )
+        return
+    else:
+        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        await safe_edit(
+            message,
+            "🗑 <b>ДЕЛО УДАЛЕНО</b>\n\nОно больше недоступно.",
+            b.as_markup(),
+        )
+        return
+
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
+    await safe_edit(
+        message,
+        f"⚙️ <b>УПРАВЛЕНИЕ ДЕЛОМ №{sid}</b>\n\n"
+        f"{info}\n\n"
+        "Завершение можно отменить позже. Удаление — окончательное.",
+        b.as_markup(),
+    )
+
+
+async def render_lifecycle_confirmation(
+    message,
+    user_id,
+    action,
+    sid,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+    ):
+        await safe_edit(message, "Управление этим делом недоступно.", home_inline(user_id))
+        return
+
+    b = InlineKeyboardBuilder()
+    if action == "c":
+        if story["status"] != "open":
+            await render_case_management(
+                message, user_id, sid, feed_index, back_to, cat_key, sort
+            )
+            return
+        b.button(
+            text="✅ Да, завершить",
+            callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>"
+        body = (
+            "Оно исчезнет из активного Зала суда.\n"
+            "Новые советы и сообщения обсуждения будут закрыты.\n"
+            "Старые ответы останутся доступными для чтения.\n\n"
+            "Позже дело можно будет возобновить."
+        )
+    elif action == "d":
+        if story["status"] not in {"open", "closed"}:
+            await render_case_management(
+                message, user_id, sid, feed_index, back_to, cat_key, sort
+            )
+            return
+        b.button(
+            text="🗑 Да, удалить",
+            callback_data=f"life:do:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "🗑 <b>УДАЛИТЬ ДЕЛО?</b>"
+        body = (
+            "Дело исчезнет из твоего списка и станет недоступно другим.\n"
+            "Опубликованные ранее советы, реакции и репутация пользователей сохранятся.\n\n"
+            "<b>Отменить удаление нельзя.</b>"
+        )
+    else:
+        await render_case_management(
+            message, user_id, sid, feed_index, back_to, cat_key, sort
+        )
+        return
+
+    b.button(
+        text="⬅️ Не менять",
+        callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+    await safe_edit(message, f"{title}\n\n{body}", b.as_markup())
 
 
 def comment_text(comment, index, total):
@@ -573,6 +776,7 @@ def comment_keyboard(
     cat_key="all",
     sort="new",
     back_to="feed",
+    discussion_open=True,
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
@@ -595,7 +799,7 @@ def comment_keyboard(
     )
 
     b.button(
-        text="🗣 Обсудить",
+        text="🗣 Обсудить" if discussion_open else "🗣 Обсуждение",
         callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
@@ -619,35 +823,48 @@ async def render_comments(
     sort="new",
     back_to="feed",
 ):
-    total = await db.comment_count(sid)
-    if total == 0:
-        story = await db.story(sid)
-        if story:
-            favorite = await db.favorite_state(message.chat.id, sid)
-            own_story = int(story["author_tg_id"]) == int(message.chat.id)
-            keyboard = case_keyboard(
-                story,
-                feed_index,
-                back_to,
-                cat_key,
-                sort,
-                favorite=favorite,
-                own_story=own_story,
-            )
-        else:
-            keyboard = home_inline(message.chat.id)
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
         await safe_edit(
             message,
-            "💬 <b>СОВЕТЫ</b>\n\nПока советов нет. Можно стать первым.",
+            "💬 <b>СОВЕТЫ</b>\n\nЭто дело сейчас недоступно.",
+            home_inline(message.chat.id),
+        )
+        return
+
+    total = await db.comment_count(sid)
+    if total == 0:
+        favorite = await db.favorite_state(message.chat.id, sid)
+        own_story = int(story["author_tg_id"]) == int(message.chat.id)
+        keyboard = case_keyboard(
+            story,
+            feed_index,
+            back_to,
+            cat_key,
+            sort,
+            favorite=favorite,
+            own_story=own_story,
+        )
+        empty_text = (
+            "Пока советов нет. Можно стать первым."
+            if story["status"] == "open"
+            else "Дело завершено. Новые советы больше не принимаются."
+        )
+        await safe_edit(
+            message,
+            "💬 <b>СОВЕТЫ</b>\n\n" + empty_text,
             keyboard,
         )
         return
 
     index = clamp(index, 0, total - 1)
     comment = await db.comment_item(sid, index)
+    text = comment_text(comment, index, total)
+    if story["status"] == "closed":
+        text += "\n\n✅ <i>Дело завершено — новые советы закрыты.</i>"
     await safe_edit(
         message,
-        comment_text(comment, index, total),
+        text,
         comment_keyboard(
             comment,
             sid,
@@ -657,6 +874,7 @@ async def render_comments(
             cat_key,
             sort,
             back_to,
+            discussion_open=story["status"] == "open",
         ),
     )
 
@@ -712,16 +930,18 @@ def discussion_window_keyboard(
     cat_key="all",
     sort="new",
     back_to="feed",
+    allow_write=True,
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
     for pos, item in enumerate(rows):
         mark = DISCUSSION_MARKS[pos]
-        b.button(
-            text=f"↩️ {mark}",
-            callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
-        )
+        if allow_write:
+            b.button(
+                text=f"↩️ {mark}",
+                callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+            )
         b.button(
             text=f"👍 {mark} {item['likes']}",
             callback_data=f"dlike:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -744,19 +964,22 @@ def discussion_window_keyboard(
             callback_data=f"discuss:{sid}:{newer_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    b.button(
-        text="✍️ Написать",
-        callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
-    )
+    if allow_write:
+        b.button(
+            text="✍️ Написать",
+            callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
     b.button(
         text="⬅️ К делу",
         callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
 
-    rows_layout = [3] * len(rows)
+    rows_layout = [3 if allow_write else 2] * len(rows)
     if offset > 0 or newer_offset < total:
         rows_layout.append(2 if offset > 0 and newer_offset < total else 1)
-    rows_layout.extend([1, 1])
+    if allow_write:
+        rows_layout.append(1)
+    rows_layout.append(1)
     b.adjust(*rows_layout)
     return b.as_markup()
 
@@ -771,7 +994,7 @@ async def render_discussion(
     back_to="feed",
 ):
     story = await db.story(sid)
-    if not story or story["is_demo"]:
+    if not story or story["is_demo"] or story["status"] in {"hidden", "deleted"}:
         await safe_edit(
             message,
             "🗣 <b>ОБСУЖДЕНИЕ</b>\n\nДля этого дела обсуждение недоступно.",
@@ -779,22 +1002,28 @@ async def render_discussion(
         )
         return
 
+    allow_write = story["status"] == "open"
     total = await db.discussion_count(sid)
     if total == 0:
         b = InlineKeyboardBuilder()
-        b.button(
-            text="✍️ Начать обсуждение",
-            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
-        )
+        if allow_write:
+            b.button(
+                text="✍️ Начать обсуждение",
+                callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
+            )
         b.button(
             text="⬅️ К делу",
             callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         b.adjust(1)
+        empty_text = (
+            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации."
+            if allow_write
+            else "Дело завершено. Новые сообщения закрыты, а обсуждение пока пустое."
+        )
         await safe_edit(
             message,
-            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации.",
+            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n" + empty_text,
             b.as_markup(),
         )
         return
@@ -806,9 +1035,13 @@ async def render_discussion(
         offset = max_offset
         rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
 
+    text = discussion_window_text(rows, offset, total)
+    if not allow_write:
+        text += "\n\n✅ <i>Дело завершено — обсуждение доступно только для чтения.</i>"
+
     await safe_edit(
         message,
-        discussion_window_text(rows, offset, total),
+        text,
         discussion_window_keyboard(
             rows,
             sid,
@@ -818,6 +1051,7 @@ async def render_discussion(
             cat_key,
             sort,
             back_to,
+            allow_write=allow_write,
         ),
     )
 
@@ -883,7 +1117,8 @@ async def render_my_cases(message, user_id, index=0, edit=True):
     story = await db.user_story_item(user_id, index)
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
-        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
+        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n"
+        f"{story_status_label(story['status'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -925,7 +1160,8 @@ async def render_favorites(message, user_id, index=0, edit=True):
 
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n"
+        f"{story_status_label(story['status'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1199,7 +1435,12 @@ async def render_admin_cases(message, page=0):
 
     b = InlineKeyboardBuilder()
     for s in rows:
-        icon = "🟢" if s["status"] == "open" else "🙈"
+        icon = {
+            "open": "🟢",
+            "closed": "✅",
+            "deleted": "🗑",
+            "hidden": "🙈",
+        }.get(s["status"], "⚪")
         b.button(
             text=f"{icon} #{s['id']} · {str(s['title'])[:24]}",
             callback_data=f"admin:story:{s['id']}:{page}",
@@ -1213,7 +1454,7 @@ async def render_admin_cases(message, page=0):
 
     await safe_edit(
         message,
-        "⚖️ <b>ДЕЛА</b>\n\n🟢 открыто · 🙈 скрыто",
+        "⚖️ <b>ДЕЛА</b>\n\n🟢 открыто · ✅ завершено · 🗑 удалено · 🙈 скрыто",
         b.as_markup(),
     )
 
@@ -1224,7 +1465,12 @@ async def render_admin_story(message, sid, page=0):
         await safe_edit(message, "Дело не найдено.", admin_menu())
         return
 
-    status = "🟢 открыто" if s["status"] == "open" else "🙈 скрыто"
+    status = {
+        "open": "🟢 открыто",
+        "closed": "✅ завершено",
+        "deleted": "🗑 удалено",
+        "hidden": "🙈 скрыто",
+    }.get(s["status"], h(s["status"]))
     body = h(s["body"][:2200])
     if len(s["body"]) > 2200:
         body += "…"
@@ -1241,10 +1487,13 @@ async def render_admin_story(message, sid, page=0):
     )
 
     b = InlineKeyboardBuilder()
-    if s["status"] == "open":
+    if s["status"] in {"open", "closed"}:
         b.button(text="🙈 Скрыть дело", callback_data=f"admin:status:{sid}:hidden:{page}")
-    else:
-        b.button(text="🟢 Вернуть в зал", callback_data=f"admin:status:{sid}:open:{page}")
+    elif s["status"] == "hidden":
+        b.button(
+            text="↩️ Вернуть предыдущий статус",
+            callback_data=f"admin:status:{sid}:open:{page}",
+        )
     b.button(text="⬅️ К делам", callback_data=f"admin:cases:{page}")
     b.adjust(1)
     await safe_edit(message, text, b.as_markup())
@@ -1505,6 +1754,124 @@ async def mycase_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("life:menu:"))
+async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[4] if len(parts) > 4 else "my"
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    await render_case_management(
+        c.message,
+        c.from_user.id,
+        sid,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:confirm:"))
+async def lifecycle_confirm_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        action = parts[2]
+        sid = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    back_to = parts[5] if len(parts) > 5 else "my"
+    cat_key = parts[6] if len(parts) > 6 else "all"
+    sort = parts[7] if len(parts) > 7 else "new"
+
+    await render_lifecycle_confirmation(
+        c.message,
+        c.from_user.id,
+        action,
+        sid,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:do:"))
+async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        action = parts[2]
+        sid = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    back_to = parts[5] if len(parts) > 5 else "my"
+    cat_key = parts[6] if len(parts) > 6 else "all"
+    sort = parts[7] if len(parts) > 7 else "new"
+
+    targets = {"c": "closed", "o": "open", "d": "deleted"}
+    target = targets.get(action)
+    if not target:
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    result = await db.change_own_story_status(c.from_user.id, sid, target)
+    status = result.get("status")
+
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией — изменить его статус нельзя.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status not in {"updated", "unchanged"}:
+        await c.answer("Не удалось изменить статус дела.", show_alert=True)
+        return
+
+    if target == "deleted":
+        b = InlineKeyboardBuilder()
+        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        await safe_edit(
+            c.message,
+            f"🗑 <b>ДЕЛО №{sid} УДАЛЕНО</b>\n\n"
+            "Оно исчезло из твоего списка и больше недоступно другим пользователям.",
+            b.as_markup(),
+        )
+        await c.answer("Дело удалено")
+        return
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("✅ Дело завершено" if target == "closed" else "🔓 Дело снова открыто")
+
+
 @dp.callback_query(F.data.startswith("cancelinput:"))
 async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -1674,6 +2041,11 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
             )
             return
 
+    story = await db.story(sid)
+    if not story or story["status"] != "open":
+        await c.answer("Дело завершено. Новые ответы в обсуждении закрыты.", show_alert=True)
+        return
+
     parent = await db.discussion_message(message_id)
     if not parent or int(parent["story_id"]) != sid or parent["status"] != "open":
         await c.answer("Сообщение уже недоступно.", show_alert=True)
@@ -1725,6 +2097,11 @@ async def discussion_like_callback(c: CallbackQuery, state: FSMContext):
     cat_key = parts[5] if len(parts) > 5 else "all"
     sort = parts[6] if len(parts) > 6 else "new"
     back_to = parts[7] if len(parts) > 7 else "feed"
+
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Это дело больше недоступно.", show_alert=True)
+        return
 
     result = await db.toggle_discussion_like(c.from_user.id, message_id)
     if result["status"] == "self":
@@ -1904,6 +2281,11 @@ async def react_callback(c: CallbackQuery, state: FSMContext):
     sort = parts[7] if len(parts) > 7 else "new"
     back_to = parts[8] if len(parts) > 8 else "feed"
 
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Это дело больше недоступно.", show_alert=True)
+        return
+
     result = await db.react(c.from_user.id, cid, value)
     if result["status"] == "self":
         await c.answer("Свой совет оценивать нельзя.", show_alert=True)
@@ -1979,6 +2361,12 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
     if not story or story["is_demo"]:
         await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
         return
+    if story["status"] == "closed":
+        await c.answer("Дело завершено. Новые советы больше не принимаются.", show_alert=True)
+        return
+    if story["status"] != "open":
+        await c.answer("Это дело сейчас недоступно.", show_alert=True)
+        return
     if int(story["author_tg_id"]) == int(c.from_user.id):
         await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
         return
@@ -2032,6 +2420,19 @@ async def comment(m: Message, state: FSMContext):
     d = await state.get_data()
     result = await db.comment(m.from_user.id, d["sid"], text)
     await state.clear()
+
+    if result.get("status") == "story_closed":
+        b = InlineKeyboardBuilder()
+        b.button(text="📖 К делу", callback_data=f"caseback:{d['sid']}:0:feed:all:new")
+        await m.answer(
+            "✅ Дело уже завершено автором. Этот совет не был опубликован.",
+            reply_markup=b.as_markup(),
+        )
+        return
+    if result.get("status") != "created":
+        await m.answer("Дело стало недоступно. Совет не был опубликован.")
+        return
+
     u = await db.get_user(m.from_user.id)
 
     cat_key = d.get("cat_key", "all")
@@ -2125,8 +2526,8 @@ async def ai_callback(c: CallbackQuery, state: FSMContext):
     back_to = parts[5] if len(parts) > 5 else "feed"
 
     story = await db.story(sid)
-    if not story:
-        await c.answer("Дело не найдено", show_alert=True)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Дело недоступно", show_alert=True)
         return
 
     result = await review(story["title"], story["body"])
@@ -2399,6 +2800,12 @@ async def report_menu_callback(c: CallbackQuery, state: FSMContext):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
 
+    check_sid = target_id if target_type == "story" else sid
+    story = await db.story(check_sid) if check_sid is not None else None
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Этот материал больше недоступен.", show_alert=True)
+        return
+
     short_type = {
         "story": "s",
         "comment": "c",
@@ -2476,6 +2883,11 @@ async def report_submit_callback(c: CallbackQuery, state: FSMContext):
         except (ValueError, IndexError):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
+
+    story = await db.story(sid) if sid is not None else None
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Этот материал больше недоступен.", show_alert=True)
+        return
 
     result = await db.report_target(
         c.from_user.id,
@@ -2582,7 +2994,8 @@ async def help_callback(c: CallbackQuery, state: FSMContext):
         "🔥 Можно открыть популярные дела или найти те, где ещё нет советов.\n"
         "💬 <b>Советы</b> — отдельные рекомендации, которые влияют на репутацию.\n"
         "🗣 <b>Обсуждение</b> — вопросы, уточнения и ответы внутри каждого дела без фарма репутации.\n"
-        "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
+        "⚖️ <b>Мои дела</b> — твои публикации и управление ими.\n"
+        "✅ Завершённое дело остаётся читать, но новые советы и обсуждение закрываются.\n"
         "⭐ <b>Избранное</b> — сохраняй дела и получай важные обновления.\n"
         "••• Жалобы спрятаны во второстепенное меню, чтобы не перегружать карточки.\n"
         "🏆 <b>Рейтинг</b> учитывает репутацию и полезные оценки советов.\n"
@@ -2758,6 +3171,8 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🛡️ Команда: <b>{s['staff']}</b>\n"
         f"⚖️ Реальные дела: <b>{s['stories']}</b>\n"
         f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
+        f"✅ Завершённые: <b>{s['closed_stories']}</b>\n"
+        f"🗑 Удалённые: <b>{s['deleted_stories']}</b>\n"
         f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
         f"💬 Советы: <b>{s['comments']}</b>\n"
         f"🗣 Сообщения обсуждений: <b>{s['discussion_messages']}</b>\n"

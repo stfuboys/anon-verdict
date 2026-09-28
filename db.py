@@ -137,6 +137,7 @@ class DB:
             await self._ensure_column(db, "users", "staff_role", "TEXT DEFAULT ''")
             await self._ensure_column(db, "users", "notifications_enabled", "INTEGER DEFAULT 1")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
+            await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
             await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
@@ -339,7 +340,7 @@ class DB:
                 SELECT
                     u.id,
                     (SELECT COUNT(*) FROM stories s
-                     WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                     WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c
                      WHERE c.author_id=u.id AND c.status='open') AS advice_count,
                     (
@@ -405,6 +406,7 @@ class DB:
                     FROM users viewer
                     JOIN stories s ON s.id=?
                     WHERE viewer.tg_id=?
+                      AND s.status IN ('open','closed')
                     """,
                     (sid, viewer_tg_id),
                 )
@@ -511,7 +513,7 @@ class DB:
                 SELECT COUNT(*)
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
-                WHERE u.tg_id=? AND s.is_demo=0
+                WHERE u.tg_id=? AND s.is_demo=0 AND s.status!='deleted'
                 """,
                 (tg_id,),
             )
@@ -529,7 +531,7 @@ class DB:
                     (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
-                WHERE u.tg_id=? AND s.is_demo=0
+                WHERE u.tg_id=? AND s.is_demo=0 AND s.status!='deleted'
                 ORDER BY s.created_at DESC
                 LIMIT 1 OFFSET ?
                 """,
@@ -550,7 +552,7 @@ class DB:
 
             cur = await db.execute(
                 """
-                SELECT u.tg_id, u.notifications_enabled, s.title
+                SELECT u.tg_id, u.notifications_enabled, s.title, s.status
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -559,7 +561,11 @@ class DB:
             )
             story_row = await cur.fetchone()
             if not story_row:
-                raise RuntimeError("Story not found")
+                return {"status": "story_not_found"}
+            if story_row[3] == "closed":
+                return {"status": "story_closed"}
+            if story_row[3] != "open":
+                return {"status": "story_unavailable"}
 
             cur = await db.execute(
                 """
@@ -589,8 +595,9 @@ class DB:
                 await self._sync_progress(db, uid)
             await db.commit()
 
-            owner_tg_id, owner_notifications, story_title = story_row
+            owner_tg_id, owner_notifications, story_title, _story_status = story_row
             return {
+                "status": "created",
                 "comment_id": comment_id,
                 "commenter_id": uid,
                 "commenter_tg_id": tg_id,
@@ -1051,7 +1058,7 @@ class DB:
                 return False
 
             cur = await db.execute(
-                "SELECT 1 FROM stories WHERE id=? AND status='open'",
+                "SELECT 1 FROM stories WHERE id=? AND status IN ('open','closed')",
                 (sid,),
             )
             if not await cur.fetchone():
@@ -1075,7 +1082,7 @@ class DB:
                 FROM favorites f
                 JOIN users u ON u.id=f.user_id
                 JOIN stories s ON s.id=f.story_id
-                WHERE u.tg_id=? AND s.status='open'
+                WHERE u.tg_id=? AND s.status IN ('open','closed')
                 """,
                 (tg_id,),
             )
@@ -1096,7 +1103,7 @@ class DB:
                 JOIN users u ON u.id=f.user_id
                 JOIN stories s ON s.id=f.story_id
                 JOIN users u2 ON u2.id=s.author_id
-                WHERE u.tg_id=? AND s.status='open'
+                WHERE u.tg_id=? AND s.status IN ('open','closed')
                 ORDER BY f.created_at DESC
                 LIMIT 1 OFFSET ?
                 """,
@@ -1300,6 +1307,8 @@ class DB:
                 "staff": "SELECT COUNT(*) FROM users WHERE tg_id != 0 AND COALESCE(staff_role, '') != ''",
                 "stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0",
                 "open_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='open'",
+                "closed_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='closed'",
+                "deleted_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='deleted'",
                 "hidden_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='hidden'",
                 "comments": "SELECT COUNT(*) FROM comments",
                 "reactions": "SELECT COUNT(*) FROM reactions",
@@ -1324,7 +1333,7 @@ class DB:
                 """
                 SELECT
                     u.*,
-                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
                 FROM users u
                 WHERE u.tg_id != 0
@@ -1342,7 +1351,7 @@ class DB:
                 """
                 SELECT
                     u.*,
-                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
                 FROM users u
                 WHERE u.tg_id=?
@@ -1405,13 +1414,80 @@ class DB:
             )
             return await cur.fetchone()
 
+    async def change_own_story_status(self, tg_id, sid, target_status):
+        if target_status not in {"open", "closed", "deleted"}:
+            raise ValueError("Unsupported lifecycle status")
+
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT s.id, s.status
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=? AND u.tg_id=? AND s.is_demo=0
+                """,
+                (sid, tg_id),
+            )
+            story = await cur.fetchone()
+            if not story:
+                return {"status": "not_found"}
+
+            current = story["status"]
+            if current == "hidden":
+                return {"status": "moderated"}
+            if current == "deleted":
+                return {"status": "deleted"}
+
+            allowed = {
+                ("open", "closed"),
+                ("closed", "open"),
+                ("open", "deleted"),
+                ("closed", "deleted"),
+            }
+            if (current, target_status) not in allowed:
+                if current == target_status:
+                    return {"status": "unchanged", "current": current}
+                return {"status": "invalid_transition", "current": current}
+
+            await db.execute(
+                "UPDATE stories SET status=? WHERE id=?",
+                (target_status, sid),
+            )
+            await db.commit()
+            return {"status": "updated", "previous": current, "current": target_status}
+
     async def set_story_status(self, sid, status):
         if status not in {"open", "hidden"}:
-            raise ValueError("Unsupported story status")
+            raise ValueError("Unsupported moderation story status")
+
         async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute(
-                "UPDATE stories SET status=? WHERE id=? AND is_demo=0",
-                (status, sid),
-            )
+            if status == "hidden":
+                cur = await db.execute(
+                    """
+                    UPDATE stories
+                    SET status_before_hidden=CASE
+                          WHEN status!='hidden' THEN status
+                          ELSE status_before_hidden
+                        END,
+                        status='hidden'
+                    WHERE id=? AND is_demo=0
+                    """,
+                    (sid,),
+                )
+            else:
+                cur = await db.execute(
+                    """
+                    UPDATE stories
+                    SET status=CASE
+                          WHEN status='hidden'
+                            THEN COALESCE(NULLIF(status_before_hidden, ''), 'open')
+                          ELSE status
+                        END,
+                        status_before_hidden=''
+                    WHERE id=? AND is_demo=0
+                    """,
+                    (sid,),
+                )
             await db.commit()
             return cur.rowcount > 0
