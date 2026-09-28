@@ -923,7 +923,11 @@ async def render_admin_reports(message, page=0):
 
     b = InlineKeyboardBuilder()
     for report in rows:
-        icon = "⚖️" if report["target_type"] == "story" else "💬"
+        icon = {
+            "story": "⚖️",
+            "comment": "💬",
+            "discussion": "🗣",
+        }.get(report["target_type"], "🚩")
         reason = str(report["reason"])[:22]
         b.button(
             text=f"🚩 #{report['id']} · {icon} {report['target_id']} · {reason}",
@@ -973,7 +977,7 @@ async def render_admin_report(message, report_id, page=0):
             )
         else:
             preview = f"⚖️ Дело №{target_id} не найдено."
-    else:
+    elif target_type == "comment":
         target = await db.admin_comment(target_id)
         if target:
             preview = (
@@ -986,6 +990,19 @@ async def render_admin_report(message, report_id, page=0):
             )
         else:
             preview = f"💬 Совет №{target_id} не найден."
+    else:
+        target = await db.admin_discussion_message(target_id)
+        if target:
+            preview = (
+                f"🗣 <b>Сообщение обсуждения №{target_id}</b>\n"
+                f"Статус: <b>{h(target['status'])}</b>\n"
+                f"Автор: {h(target['author_nickname'])} · "
+                f"<code>{target['author_tg_id']}</code>\n"
+                f"К делу: {h(target['story_title'])}\n\n"
+                f"{h(target['body'][:1200])}"
+            )
+        else:
+            preview = f"🗣 Сообщение №{target_id} не найдено."
 
     text = (
         f"🚩 <b>ЖАЛОБА №{report_id}</b>\n\n"
@@ -2012,14 +2029,21 @@ async def report_menu_callback(c: CallbackQuery):
         return
 
     sid = None
-    if target_type == "comment":
+    if target_type in {"comment", "discussion"}:
         try:
             sid = int(parts[3])
         except (ValueError, IndexError):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
 
-    short_type = "s" if target_type == "story" else "c"
+    short_type = {
+        "story": "s",
+        "comment": "c",
+        "discussion": "d",
+    }.get(target_type)
+    if not short_type:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
     b = InlineKeyboardBuilder()
     for reason_key, label in REPORT_REASONS.items():
         suffix = f":{sid}" if sid is not None else ""
@@ -2033,10 +2057,15 @@ async def report_menu_callback(c: CallbackQuery):
             text="⬅️ К делу",
             callback_data=f"case:{target_id}:0:all:new",
         )
-    else:
+    elif target_type == "comment":
         b.button(
             text="⬅️ К советам",
             callback_data=f"comments:{sid}:0:0:all:new",
+        )
+    else:
+        b.button(
+            text="⬅️ К обсуждению",
+            callback_data=f"discuss:{sid}:0:0:all:new",
         )
     b.adjust(1)
 
@@ -2057,7 +2086,14 @@ async def report_submit_callback(c: CallbackQuery):
         await c.answer("Некорректная жалоба", show_alert=True)
         return
 
-    target_type = "story" if parts[1] == "s" else "comment"
+    target_type = {
+        "s": "story",
+        "c": "comment",
+        "d": "discussion",
+    }.get(parts[1])
+    if not target_type:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
     try:
         target_id = int(parts[2])
     except ValueError:
@@ -2070,7 +2106,7 @@ async def report_submit_callback(c: CallbackQuery):
         return
 
     sid = target_id if target_type == "story" else None
-    if target_type == "comment":
+    if target_type in {"comment", "discussion"}:
         try:
             sid = int(parts[4])
         except (ValueError, IndexError):
@@ -2115,7 +2151,11 @@ async def report_submit_callback(c: CallbackQuery):
         callback_data=(
             f"case:{sid}:0:all:new"
             if target_type == "story"
-            else f"comments:{sid}:0:0:all:new"
+            else (
+                f"comments:{sid}:0:0:all:new"
+                if target_type == "comment"
+                else f"discuss:{sid}:0:0:all:new"
+            )
         ),
     )
     await safe_edit(
@@ -2338,6 +2378,7 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
         f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
         f"💬 Советы: <b>{s['comments']}</b>\n"
+        f"🗣 Сообщения обсуждений: <b>{s['discussion_messages']}</b>\n"
         f"👍👎 Реакции: <b>{s['reactions']}</b>\n"
         f"⭐ Сохранений: <b>{s['favorites']}</b>\n"
         f"🚩 Открытых жалоб: <b>{s['reports']}</b>",
@@ -2405,8 +2446,10 @@ async def admin_report_action_callback(c: CallbackQuery):
 
     if report["target_type"] == "story":
         await db.set_story_status(report["target_id"], "hidden")
-    else:
+    elif report["target_type"] == "comment":
         await db.set_comment_status(report["target_id"], "hidden")
+    else:
+        await db.set_discussion_status(report["target_id"], "hidden")
 
     await db.resolve_report(report_id, "resolved")
     await render_admin_reports(c.message, page)
