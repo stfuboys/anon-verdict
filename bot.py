@@ -26,11 +26,18 @@ class Comment(StatesGroup):
 
 def menu():
     b=InlineKeyboardBuilder()
-    b.button(text="📝 Рассказать историю",callback_data="new")
-    b.button(text="🌎 Лента",callback_data="feed")
-    b.button(text="👤 Профиль",callback_data="profile")
+    b.button(text="📝 Рассказать ситуацию",callback_data="new")
+    b.button(text="📜 Лента ситуаций",callback_data="feed")
+    b.button(text="👤 Мой профиль",callback_data="profile")
     b.button(text="🏆 Рейтинг",callback_data="rating")
-    b.adjust(2,2); return b.as_markup()
+    b.button(text="ℹ️ Как это работает",callback_data="help")
+    b.adjust(1,1,2,1)
+    return b.as_markup()
+
+def home_button():
+    b=InlineKeyboardBuilder()
+    b.button(text="🏠 Главное меню",callback_data="home")
+    return b.as_markup()
 
 @dp.message(CommandStart())
 async def start(m:Message):
@@ -62,6 +69,24 @@ async def body(m:Message,state:FSMContext):
     if reasons: await m.answer("Удали из текста персональные данные."); return
     d=await state.get_data(); sid=await db.create_story(m.from_user.id,d["category"],d["title"],text)
     await state.clear(); await m.answer(f"📜 История №{sid} опубликована анонимно.",reply_markup=menu())
+
+@dp.callback_query(F.data=="home")
+async def home(c:CallbackQuery):
+    await c.message.answer("⚖️ <b>Главное меню</b>\n\nВыбирай, что хочешь сделать:",parse_mode="HTML",reply_markup=menu())
+    await c.answer()
+
+@dp.callback_query(F.data=="help")
+async def help_menu(c:CallbackQuery):
+    await c.message.answer(
+        "⚖️ <b>Как это работает</b>\n\n"
+        "1️⃣ Анонимно рассказываешь свою ситуацию.\n"
+        "2️⃣ Другие пользователи читают её.\n"
+        "3️⃣ Они дают советы и своё мнение.\n"
+        "4️⃣ Ты сам решаешь, как поступить.\n\n"
+        "🏛️ Здесь есть профили, репутация и звания: "
+        "Новичок → Присяжный → Судья → Старший судья → Верховный судья.",
+        parse_mode="HTML", reply_markup=home_button())
+    await c.answer()
 
 @dp.callback_query(F.data=="feed")
 async def feed(c:CallbackQuery):
@@ -130,7 +155,7 @@ async def bio(m:Message,state:FSMContext):
 async def rating(c:CallbackQuery):
     rows=await db.leaderboard()
     text="🏆 <b>Рейтинг</b>\n\n"+"\n".join(f"{i}. {x['nickname']} — ⭐ {x['reputation']} · {x['title']}" for i,x in enumerate(rows,1))
-    await c.message.answer(text,parse_mode="HTML"); await c.answer()
+    await c.message.answer(text,parse_mode="HTML",reply_markup=home_button()); await c.answer()
 
 @dp.message(Command("profile"))
 async def p(m:Message):
