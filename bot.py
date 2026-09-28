@@ -110,7 +110,7 @@ def clamp(value, low, high):
 
 
 def is_owner(user_id):
-    return owner_id is not None and int(user_id) == owner_id
+    return owner_id is not None and user_id is not None and int(user_id) == owner_id
 
 
 def main_keyboard(user_id=None):
