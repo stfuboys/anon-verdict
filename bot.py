@@ -2255,7 +2255,11 @@ async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
         return
 
     best_author_tg_id = result.get("best_author_tg_id")
-    if best_author_tg_id and int(best_author_tg_id) != int(c.from_user.id):
+    if (
+        result.get("best_author_notifications")
+        and best_author_tg_id
+        and int(best_author_tg_id) != int(c.from_user.id)
+    ):
         b = InlineKeyboardBuilder()
         b.button(text="📖 Открыть дело", callback_data=f"case:{sid}:0:all:new")
         await safe_notify(
