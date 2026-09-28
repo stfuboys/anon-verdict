@@ -349,6 +349,7 @@ class DB:
                 SELECT
                     s.*,
                     u.nickname,
+                    u.tg_id AS author_tg_id,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
