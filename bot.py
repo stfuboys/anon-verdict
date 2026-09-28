@@ -1359,6 +1359,209 @@ async def my_cases_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("favorites:"))
+async def favorites_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    try:
+        index = int(c.data.split(":")[1])
+    except (ValueError, IndexError):
+        index = 0
+    await render_favorites(c.message, c.from_user.id, index)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("favcase:"))
+async def favorite_case_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    try:
+        _, sid, index = c.data.split(":")
+        sid, index = int(sid), int(index)
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+    await render_case(
+        c.message,
+        sid,
+        index,
+        back_to="favorites",
+        count_view=True,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("fav:"))
+async def favorite_toggle_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[3] if len(parts) > 3 else "feed"
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    enabled = await db.toggle_favorite(c.from_user.id, sid)
+    await render_case(
+        c.message,
+        sid,
+        index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer(
+        "⭐ Дело сохранено. Буду сообщать о новых советах."
+        if enabled
+        else "Дело удалено из избранного."
+    )
+
+
+@dp.callback_query(F.data == "notifications:toggle")
+async def notifications_toggle_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    enabled = await db.toggle_notifications(c.from_user.id)
+    await render_profile(c.message, c.from_user.id)
+    await c.answer(
+        "🔔 Уведомления включены." if enabled else "🔕 Уведомления выключены."
+    )
+
+
+@dp.callback_query(F.data.startswith("report:"))
+async def report_menu_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    if len(parts) < 3:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
+
+    target_type = parts[1]
+    try:
+        target_id = int(parts[2])
+    except ValueError:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
+
+    sid = None
+    if target_type == "comment":
+        try:
+            sid = int(parts[3])
+        except (ValueError, IndexError):
+            await c.answer("Некорректная жалоба", show_alert=True)
+            return
+
+    short_type = "s" if target_type == "story" else "c"
+    b = InlineKeyboardBuilder()
+    for reason_key, label in REPORT_REASONS.items():
+        suffix = f":{sid}" if sid is not None else ""
+        b.button(
+            text=label,
+            callback_data=f"reportdo:{short_type}:{target_id}:{reason_key}{suffix}",
+        )
+
+    if target_type == "story":
+        b.button(
+            text="⬅️ К делу",
+            callback_data=f"case:{target_id}:0:all:new",
+        )
+    else:
+        b.button(
+            text="⬅️ К советам",
+            callback_data=f"comments:{sid}:0:0:all:new",
+        )
+    b.adjust(1)
+
+    await safe_edit(
+        c.message,
+        "🚩 <b>ЖАЛОБА</b>\n\n"
+        "Выбери причину. Жалоба попадёт в закрытую очередь модерации.",
+        b.as_markup(),
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("reportdo:"))
+async def report_submit_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    if len(parts) < 4:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
+
+    target_type = "story" if parts[1] == "s" else "comment"
+    try:
+        target_id = int(parts[2])
+    except ValueError:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
+
+    reason_key = parts[3]
+    if reason_key not in REPORT_REASONS:
+        await c.answer("Неизвестная причина", show_alert=True)
+        return
+
+    sid = target_id if target_type == "story" else None
+    if target_type == "comment":
+        try:
+            sid = int(parts[4])
+        except (ValueError, IndexError):
+            await c.answer("Некорректная жалоба", show_alert=True)
+            return
+
+    result = await db.report_target(
+        c.from_user.id,
+        target_type,
+        target_id,
+        REPORT_REASONS[reason_key],
+    )
+
+    status = result.get("status")
+    if status == "self":
+        await c.answer("На собственный контент жалобу отправлять нельзя.", show_alert=True)
+        return
+    if status == "duplicate":
+        await c.answer("Ты уже отправлял жалобу на этот материал.", show_alert=True)
+        return
+    if status != "created":
+        await c.answer("Не удалось отправить жалобу.", show_alert=True)
+        return
+
+    report_id = result["report_id"]
+    if owner_id and int(owner_id) != int(c.from_user.id):
+        rb = InlineKeyboardBuilder()
+        rb.button(
+            text="🚩 Открыть жалобу",
+            callback_data=f"admin:report:{report_id}:0",
+        )
+        await safe_notify(
+            owner_id,
+            "🚩 <b>Новая жалоба в Anon Verdict</b>\n\n"
+            f"Причина: {h(REPORT_REASONS[reason_key])}",
+            rb.as_markup(),
+        )
+
+    back = InlineKeyboardBuilder()
+    back.button(
+        text="⬅️ Вернуться",
+        callback_data=(
+            f"case:{sid}:0:all:new"
+            if target_type == "story"
+            else f"comments:{sid}:0:0:all:new"
+        ),
+    )
+    await safe_edit(
+        c.message,
+        "✅ <b>Жалоба отправлена.</b>\n\n"
+        "Модерация увидит её в закрытой панели.",
+        back.as_markup(),
+    )
+    await c.answer("Жалоба отправлена")
+
+
 @dp.callback_query(F.data.startswith("rating:"))
 async def rating_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -1441,6 +1644,13 @@ async def menu_my_cases(m: Message):
     await ensure_message_user(m)
     msg = await m.answer("⚖️ Открываю твои дела…")
     await render_my_cases(msg, m.from_user.id, 0)
+
+
+@dp.message(F.text == "⭐ Избранное")
+async def menu_favorites(m: Message):
+    await ensure_message_user(m)
+    msg = await m.answer("⭐ Открываю избранное…")
+    await render_favorites(msg, m.from_user.id, 0)
 
 
 @dp.message(F.text == "🎖️ Звания")
