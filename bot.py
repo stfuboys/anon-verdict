@@ -113,6 +113,10 @@ class Discussion(StatesGroup):
     body = State()
 
 
+class StoryUpdate(StatesGroup):
+    body = State()
+
+
 class Admin(StatesGroup):
     user_lookup = State()
 
@@ -208,6 +212,51 @@ async def safe_notify(tg_id, text, reply_markup=None):
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest):
+        return False
+
+
+async def upsert_advice_notification(owner_tg_id, sid, story_title, commenter_nickname, total):
+    inbox = await db.advice_inbox(owner_tg_id, sid)
+    seen = int(inbox["last_seen_count"] or 0) if inbox else 0
+    unread = max(1, int(total) - seen)
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text=f"💬 Читать ответы · {total}",
+        callback_data=f"comments:{sid}:{max(0, int(total)-1)}:0:all:new:my",
+    )
+    markup = b.as_markup()
+    text = (
+        "💬 <b>НОВЫЕ ОТВЕТЫ К ТВОЕМУ ДЕЛУ</b>\n\n"
+        f"⚖️ {h(story_title)}\n"
+        f"🆕 Непрочитанных: <b>{unread}</b> · Всего: <b>{total}</b>\n"
+        f"Последний ответ: 🧠 {h(commenter_nickname)}"
+    )
+
+    message_id = int(inbox["message_id"]) if inbox and inbox["message_id"] else None
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=owner_tg_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+            return True
+        except TelegramBadRequest:
+            pass
+
+    try:
+        sent = await bot.send_message(
+            owner_tg_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        await db.set_advice_inbox(owner_tg_id, sid, sent.message_id, seen)
         return True
     except (TelegramForbiddenError, TelegramBadRequest):
         return False
@@ -496,6 +545,12 @@ def case_keyboard(
             callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
+    if not story["is_demo"]:
+        b.button(
+            text="📝 Обновления",
+            callback_data=f"updates:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+
     if own_story and not story["is_demo"] and status in {"open", "closed"}:
         b.button(
             text="⚙️ Управление",
@@ -605,6 +660,23 @@ async def render_case(
     )
 
 
+async def render_story_updates(message, sid, feed_index=0, back_to="feed", cat_key="all", sort="new"):
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await safe_edit(message, "📝 Обновления дела недоступны.", home_inline(message.chat.id))
+        return
+    rows = await db.story_updates(sid, 5)
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ К делу", callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
+    if not rows:
+        await safe_edit(message, "📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>\n\nПока обновлений нет.", b.as_markup())
+        return
+    blocks = ["📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>"]
+    for n, row in enumerate(reversed(rows), 1):
+        blocks.append(f"<b>Обновление {n}</b>\n{h(row['body'])}")
+    await safe_edit(message, "\n\n".join(blocks), b.as_markup())
+
+
 async def render_case_management(
     message,
     user_id,
@@ -625,6 +697,12 @@ async def render_case_management(
 
     status = story["status"]
     b = InlineKeyboardBuilder()
+
+    if status in {"open", "closed"}:
+        b.button(
+            text="📝 Обновить ситуацию",
+            callback_data=f"life:update:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
 
     if status == "open":
         b.button(
@@ -833,6 +911,29 @@ async def render_comments(
         return
 
     total = await db.comment_count(sid)
+    if int(story["author_tg_id"]) == int(message.chat.id):
+        await db.mark_advice_seen(message.chat.id, sid, total)
+        inbox = await db.advice_inbox(message.chat.id, sid)
+        if inbox and inbox["message_id"]:
+            try:
+                b = InlineKeyboardBuilder()
+                b.button(
+                    text=f"💬 Читать ответы · {total}",
+                    callback_data=f"comments:{sid}:{max(0,total-1)}:0:all:new:my",
+                )
+                await bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=int(inbox["message_id"]),
+                    text=(
+                        "💬 <b>ОТВЕТЫ К ТВОЕМУ ДЕЛУ</b>\n\n"
+                        f"⚖️ {h(story['title'])}\n"
+                        f"✅ Всё прочитано · Всего: <b>{total}</b>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=b.as_markup(),
+                )
+            except TelegramBadRequest:
+                pass
     if total == 0:
         favorite = await db.favorite_state(message.chat.id, sid)
         own_story = int(story["author_tg_id"]) == int(message.chat.id)
@@ -1754,6 +1855,81 @@ async def mycase_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("updates:"))
+async def updates_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1]); feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True); return
+    back_to = parts[3] if len(parts)>3 else "feed"
+    cat_key = parts[4] if len(parts)>4 else "all"
+    sort = parts[5] if len(parts)>5 else "new"
+    await render_story_updates(c.message, sid, feed_index, back_to, cat_key, sort)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:update:"))
+async def lifecycle_update_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts=c.data.split(":")
+    try:
+        sid=int(parts[2]); feed_index=int(parts[3])
+    except (ValueError,IndexError):
+        await c.answer("Некорректное дело",show_alert=True); return
+    back_to=parts[4] if len(parts)>4 else "my"
+    cat_key=parts[5] if len(parts)>5 else "all"
+    sort=parts[6] if len(parts)>6 else "new"
+    story=await db.story(sid)
+    if not story or story["is_demo"] or int(story["author_tg_id"])!=int(c.from_user.id) or story["status"] not in {"open","closed"}:
+        await c.answer("Обновление недоступно.",show_alert=True); return
+    await state.set_state(StoryUpdate.body)
+    await state.update_data(sid=sid,feed_index=feed_index,back_to=back_to,cat_key=cat_key,sort=sort)
+    cancel=InlineKeyboardBuilder()
+    cancel.button(text="❌ Отменить",callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
+    await c.message.answer(
+        "📝 <b>ОБНОВИТЬ СИТУАЦИЮ</b>\n\nРасскажи, что изменилось после публикации дела. Старый текст останется на месте — обновление добавится в историю.",
+        parse_mode="HTML",reply_markup=cancel.as_markup()
+    )
+    await c.answer()
+
+
+@dp.message(StoryUpdate.body)
+async def story_update_message(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear(); await route_primary_navigation(m); return
+    body,reasons=moderate(m.text or ""); body=body.strip()
+    if not body:
+        await m.answer("Напиши обновление текстом."); return
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы."); return
+    d=await state.get_data()
+    result=await db.add_story_update(m.from_user.id,d["sid"],body)
+    await state.clear()
+    if result.get("status")!="created":
+        await m.answer("Не удалось добавить обновление. Дело недоступно."); return
+
+    story=await db.story(d["sid"])
+    followers=await db.favorite_subscribers(d["sid"],exclude_tg_ids=[m.from_user.id])
+    if followers:
+        b=InlineKeyboardBuilder()
+        b.button(text="📝 Читать обновление",callback_data=f"updates:{d['sid']}:0:feed:all:new")
+        asyncio.create_task(notify_many(
+            followers,
+            "📝 <b>Автор обновил сохранённое дело</b>\n\n"
+            f"⚖️ {h(story['title'])}\n"
+            f"{h(body[:500])}{'…' if len(body)>500 else ''}",
+            b.as_markup(),
+        ))
+    b=InlineKeyboardBuilder()
+    b.button(text="📖 К делу",callback_data=f"caseback:{d['sid']}:{d.get('feed_index',0)}:{d.get('back_to','my')}:{d.get('cat_key','all')}:{d.get('sort','new')}")
+    await m.answer("✅ <b>Обновление добавлено.</b>\n\nСтарый текст дела сохранён.",parse_mode="HTML",reply_markup=b.as_markup())
+
+
 @dp.callback_query(F.data.startswith("life:menu:"))
 async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2460,13 +2636,12 @@ async def comment(m: Message, state: FSMContext):
         and owner_tg_id
         and int(owner_tg_id) != int(m.from_user.id)
     ):
-        await safe_notify(
+        await upsert_advice_notification(
             owner_tg_id,
-            "💬 <b>Новый совет к твоему делу</b>\n\n"
-            f"⚖️ {h(result.get('story_title'))}\n"
-            f"🧠 {h(result.get('commenter_nickname'))} оставил новый совет.\n\n"
-            f"Всего ответов: <b>{advice_total}</b>",
-            open_answers.as_markup(),
+            d["sid"],
+            result.get("story_title"),
+            result.get("commenter_nickname"),
+            advice_total,
         )
 
     followers = await db.favorite_subscribers(

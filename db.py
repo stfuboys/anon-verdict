@@ -72,6 +72,23 @@ class DB:
                   created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS story_updates(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  story_id INTEGER NOT NULL,
+                  author_id INTEGER NOT NULL,
+                  body TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS advice_inbox(
+                  owner_id INTEGER NOT NULL,
+                  story_id INTEGER NOT NULL,
+                  message_id INTEGER,
+                  last_seen_count INTEGER DEFAULT 0,
+                  updated_at TEXT NOT NULL,
+                  PRIMARY KEY(owner_id, story_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS reactions(
                   user_id INTEGER NOT NULL,
                   comment_id INTEGER NOT NULL,
@@ -607,6 +624,122 @@ class DB:
                 "story_title": story_title,
                 "reputation_reward": reputation_reward,
             }
+
+    async def add_story_update(self, tg_id, sid, body):
+        body = (body or "").strip()
+        if not body:
+            return {"status": "empty"}
+
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT s.id, s.status, s.author_id
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=? AND u.tg_id=? AND s.is_demo=0
+                """,
+                (sid, tg_id),
+            )
+            story = await cur.fetchone()
+            if not story:
+                return {"status": "not_found"}
+            if story["status"] in {"hidden", "deleted"}:
+                return {"status": "unavailable"}
+
+            now = now()
+            cur = await db.execute(
+                """
+                INSERT INTO story_updates(story_id, author_id, body, created_at)
+                VALUES(?,?,?,?)
+                """,
+                (sid, story["author_id"], body, now),
+            )
+            update_id = cur.lastrowid
+            await db.commit()
+            return {
+                "status": "created",
+                "update_id": update_id,
+                "story_status": story["status"],
+            }
+
+    async def story_updates(self, sid, limit=5):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT id, body, created_at
+                FROM story_updates
+                WHERE story_id=?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (sid, max(1, int(limit))),
+            )
+            return await cur.fetchall()
+
+    async def story_update_count(self, sid):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM story_updates WHERE story_id=?",
+                (sid,),
+            )
+            return (await cur.fetchone())[0]
+
+    async def advice_inbox(self, owner_tg_id, sid):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT ai.message_id, ai.last_seen_count
+                FROM advice_inbox ai
+                JOIN users u ON u.id=ai.owner_id
+                WHERE u.tg_id=? AND ai.story_id=?
+                """,
+                (owner_tg_id, sid),
+            )
+            return await cur.fetchone()
+
+    async def set_advice_inbox(self, owner_tg_id, sid, message_id, last_seen_count):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (owner_tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            owner_id = row[0]
+            await db.execute(
+                """
+                INSERT INTO advice_inbox(owner_id, story_id, message_id, last_seen_count, updated_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(owner_id, story_id) DO UPDATE SET
+                  message_id=excluded.message_id,
+                  last_seen_count=excluded.last_seen_count,
+                  updated_at=excluded.updated_at
+                """,
+                (owner_id, sid, message_id, max(0, int(last_seen_count)), now()),
+            )
+            await db.commit()
+            return True
+
+    async def mark_advice_seen(self, owner_tg_id, sid, seen_count):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (owner_tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            owner_id = row[0]
+            await db.execute(
+                """
+                INSERT INTO advice_inbox(owner_id, story_id, message_id, last_seen_count, updated_at)
+                VALUES(?,?,NULL,?,?)
+                ON CONFLICT(owner_id, story_id) DO UPDATE SET
+                  last_seen_count=MAX(advice_inbox.last_seen_count, excluded.last_seen_count),
+                  updated_at=excluded.updated_at
+                """,
+                (owner_id, sid, max(0, int(seen_count)), now()),
+            )
+            await db.commit()
+            return True
 
     async def comment_count(self, sid):
         async with aiosqlite.connect(self.path) as db:
