@@ -85,6 +85,11 @@ class DB:
                   created_at TEXT NOT NULL,
                   PRIMARY KEY(follower_id, following_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS app_meta(
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
                 """
             )
 
@@ -95,6 +100,8 @@ class DB:
                 """
                 CREATE INDEX IF NOT EXISTS idx_stories_feed
                   ON stories(status, is_demo, created_at);
+                CREATE INDEX IF NOT EXISTS idx_stories_feed_category
+                  ON stories(status, category, is_demo, created_at);
                 CREATE INDEX IF NOT EXISTS idx_stories_author
                   ON stories(author_id, is_demo, created_at);
                 CREATE INDEX IF NOT EXISTS idx_comments_story
@@ -121,6 +128,7 @@ class DB:
                 )
 
             await self._seed_demo_content(db)
+            await self._migrate_reaction_reputation(db)
             await db.commit()
 
     async def _seed_demo_content(self, db):
@@ -194,6 +202,38 @@ class DB:
                 """,
                 (system_user_id, category, title, body, now()),
             )
+
+    async def _migrate_reaction_reputation(self, db):
+        cur = await db.execute(
+            "SELECT value FROM app_meta WHERE key='reaction_reputation_v1'"
+        )
+        if await cur.fetchone():
+            return
+
+        cur = await db.execute(
+            """
+            SELECT c.author_id, COUNT(*)
+            FROM reactions r
+            JOIN comments c ON c.id=r.comment_id
+            WHERE r.value=1 AND r.user_id != c.author_id
+            GROUP BY c.author_id
+            """
+        )
+        for author_id, likes_count in await cur.fetchall():
+            if likes_count:
+                await db.execute(
+                    "UPDATE users SET reputation=reputation+? WHERE id=?",
+                    (likes_count, author_id),
+                )
+                await self._sync_progress(db, author_id)
+
+        await db.execute(
+            """
+            INSERT INTO app_meta(key, value)
+            VALUES('reaction_reputation_v1', ?)
+            """,
+            (now(),),
+        )
 
     async def ensure_user(self, tg_id, tg_username=None):
         async with aiosqlite.connect(self.path) as db:
