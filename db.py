@@ -90,11 +90,30 @@ class DB:
                   key TEXT PRIMARY KEY,
                   value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS favorites(
+                  user_id INTEGER NOT NULL,
+                  story_id INTEGER NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY(user_id, story_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS reports(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  reporter_id INTEGER NOT NULL,
+                  target_type TEXT NOT NULL,
+                  target_id INTEGER NOT NULL,
+                  reason TEXT NOT NULL,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT NOT NULL
+                );
                 """
             )
 
             await self._ensure_column(db, "users", "staff_role", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "users", "notifications_enabled", "INTEGER DEFAULT 1")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
+            await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
                 """
@@ -110,6 +129,12 @@ class DB:
                   ON users(reputation DESC, created_at);
                 CREATE INDEX IF NOT EXISTS idx_reactions_comment
                   ON reactions(comment_id, value);
+                CREATE INDEX IF NOT EXISTS idx_favorites_user
+                  ON favorites(user_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_favorites_story
+                  ON favorites(story_id);
+                CREATE INDEX IF NOT EXISTS idx_reports_status
+                  ON reports(status, created_at);
                 """
             )
 
@@ -324,7 +349,7 @@ class DB:
                 SELECT
                     s.*,
                     u.nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -343,7 +368,7 @@ class DB:
 
         if sort == "unanswered":
             clauses.append(
-                "NOT EXISTS (SELECT 1 FROM comments c0 WHERE c0.story_id=s.id)"
+                "NOT EXISTS (SELECT 1 FROM comments c0 WHERE c0.story_id=s.id AND c0.status='open')"
             )
 
         where_sql = " AND ".join(clauses)
@@ -382,7 +407,7 @@ class DB:
                 SELECT
                     s.*,
                     u.nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE {where_sql}
@@ -413,7 +438,7 @@ class DB:
                 """
                 SELECT
                     s.*,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE u.tg_id=? AND s.is_demo=0
@@ -426,19 +451,37 @@ class DB:
 
     async def comment(self, tg_id, sid, body):
         async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
+            cur = await db.execute(
+                "SELECT id, nickname FROM users WHERE tg_id=?",
+                (tg_id,),
+            )
             row = await cur.fetchone()
             if not row:
                 raise RuntimeError("User must be initialized before commenting")
-            uid = row[0]
+            uid, nickname = row
 
-            await db.execute(
+            cur = await db.execute(
                 """
-                INSERT INTO comments(story_id, author_id, body, created_at)
-                VALUES(?,?,?,?)
+                SELECT u.tg_id, u.notifications_enabled, s.title
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=?
+                """,
+                (sid,),
+            )
+            story_row = await cur.fetchone()
+            if not story_row:
+                raise RuntimeError("Story not found")
+
+            cur = await db.execute(
+                """
+                INSERT INTO comments(story_id, author_id, body, created_at, status)
+                VALUES(?,?,?,?, 'open')
                 """,
                 (sid, uid, body[:2000], now()),
             )
+            comment_id = cur.lastrowid
+
             await db.execute(
                 "UPDATE users SET reputation=reputation+2 WHERE id=?",
                 (uid,),
@@ -446,10 +489,21 @@ class DB:
             await self._sync_progress(db, uid)
             await db.commit()
 
+            owner_tg_id, owner_notifications, story_title = story_row
+            return {
+                "comment_id": comment_id,
+                "commenter_id": uid,
+                "commenter_tg_id": tg_id,
+                "commenter_nickname": nickname,
+                "story_owner_tg_id": owner_tg_id,
+                "story_owner_notifications": bool(owner_notifications),
+                "story_title": story_title,
+            }
+
     async def comment_count(self, sid):
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
-                "SELECT COUNT(*) FROM comments WHERE story_id=?",
+                "SELECT COUNT(*) FROM comments WHERE story_id=? AND status='open'",
                 (sid,),
             )
             return (await cur.fetchone())[0]
@@ -468,7 +522,7 @@ class DB:
                     (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=-1) AS dislikes
                 FROM comments c
                 JOIN users u ON u.id=c.author_id
-                WHERE c.story_id=?
+                WHERE c.story_id=? AND c.status='open'
                 ORDER BY c.created_at ASC
                 LIMIT 1 OFFSET ?
                 """,
@@ -537,10 +591,24 @@ class DB:
                 )
                 await self._sync_progress(db, author_id)
 
+            cur = await db.execute(
+                """
+                SELECT u.tg_id, u.notifications_enabled, c.story_id
+                FROM comments c
+                JOIN users u ON u.id=c.author_id
+                WHERE c.id=?
+                """,
+                (cid,),
+            )
+            author_row = await cur.fetchone()
+
             await db.commit()
             return {
                 "status": "updated",
                 "reputation_delta": reputation_delta,
+                "author_tg_id": author_row[0] if author_row else None,
+                "author_notifications": bool(author_row[1]) if author_row else False,
+                "story_id": author_row[2] if author_row else None,
             }
 
     async def leaderboard_count(self):
@@ -563,6 +631,296 @@ class DB:
             )
             return await cur.fetchall()
 
+    async def set_notifications(self, tg_id, enabled):
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE users SET notifications_enabled=? WHERE tg_id=?",
+                (1 if enabled else 0, tg_id),
+            )
+            await db.commit()
+
+    async def toggle_notifications(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT notifications_enabled FROM users WHERE tg_id=?",
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+            current = bool(row[0]) if row else True
+            new_value = not current
+            await db.execute(
+                "UPDATE users SET notifications_enabled=? WHERE tg_id=?",
+                (1 if new_value else 0, tg_id),
+            )
+            await db.commit()
+            return new_value
+
+    async def favorite_state(self, tg_id, sid):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            cur = await db.execute(
+                "SELECT 1 FROM favorites WHERE user_id=? AND story_id=?",
+                (row[0], sid),
+            )
+            return bool(await cur.fetchone())
+
+    async def toggle_favorite(self, tg_id, sid):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            uid = row[0]
+
+            cur = await db.execute(
+                "SELECT 1 FROM favorites WHERE user_id=? AND story_id=?",
+                (uid, sid),
+            )
+            exists = await cur.fetchone()
+            if exists:
+                await db.execute(
+                    "DELETE FROM favorites WHERE user_id=? AND story_id=?",
+                    (uid, sid),
+                )
+                await db.commit()
+                return False
+
+            cur = await db.execute(
+                "SELECT 1 FROM stories WHERE id=? AND status='open'",
+                (sid,),
+            )
+            if not await cur.fetchone():
+                return False
+
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO favorites(user_id, story_id, created_at)
+                VALUES(?,?,?)
+                """,
+                (uid, sid, now()),
+            )
+            await db.commit()
+            return True
+
+    async def favorite_count(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM favorites f
+                JOIN users u ON u.id=f.user_id
+                JOIN stories s ON s.id=f.story_id
+                WHERE u.tg_id=? AND s.status='open'
+                """,
+                (tg_id,),
+            )
+            return (await cur.fetchone())[0]
+
+    async def favorite_item(self, tg_id, offset=0):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    s.*,
+                    u2.nickname,
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
+                FROM favorites f
+                JOIN users u ON u.id=f.user_id
+                JOIN stories s ON s.id=f.story_id
+                JOIN users u2 ON u2.id=s.author_id
+                WHERE u.tg_id=? AND s.status='open'
+                ORDER BY f.created_at DESC
+                LIMIT 1 OFFSET ?
+                """,
+                (tg_id, max(0, offset)),
+            )
+            return await cur.fetchone()
+
+    async def favorite_subscribers(self, sid, exclude_tg_ids=None):
+        exclude_tg_ids = set(exclude_tg_ids or [])
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT DISTINCT u.tg_id
+                FROM favorites f
+                JOIN users u ON u.id=f.user_id
+                WHERE f.story_id=? AND u.notifications_enabled=1
+                """,
+                (sid,),
+            )
+            rows = await cur.fetchall()
+            return [row[0] for row in rows if row[0] not in exclude_tg_ids]
+
+    async def report_target(self, reporter_tg_id, target_type, target_id, reason):
+        if target_type not in {"story", "comment"}:
+            raise ValueError("Unsupported report target")
+
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (reporter_tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return {"status": "user_not_found"}
+            reporter_id = row[0]
+
+            table = "stories" if target_type == "story" else "comments"
+            cur = await db.execute(
+                f"SELECT 1 FROM {table} WHERE id=?",
+                (target_id,),
+            )
+            if not await cur.fetchone():
+                return {"status": "target_not_found"}
+
+            cur = await db.execute(
+                """
+                SELECT id
+                FROM reports
+                WHERE reporter_id=? AND target_type=? AND target_id=? AND status='open'
+                """,
+                (reporter_id, target_type, target_id),
+            )
+            if await cur.fetchone():
+                return {"status": "duplicate"}
+
+            cur = await db.execute(
+                """
+                INSERT INTO reports(reporter_id, target_type, target_id, reason, created_at)
+                VALUES(?,?,?,?,?)
+                """,
+                (reporter_id, target_type, target_id, reason[:80], now()),
+            )
+            await db.commit()
+            return {"status": "created", "report_id": cur.lastrowid}
+
+    async def story_cooldown_remaining(self, tg_id, cooldown_seconds=60):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT s.created_at
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE u.tg_id=? AND s.is_demo=0
+                ORDER BY s.created_at DESC
+                LIMIT 1
+                """,
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+            return self._cooldown_remaining(row[0] if row else None, cooldown_seconds)
+
+    async def comment_cooldown_remaining(self, tg_id, cooldown_seconds=15):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT c.created_at
+                FROM comments c
+                JOIN users u ON u.id=c.author_id
+                WHERE u.tg_id=?
+                ORDER BY c.created_at DESC
+                LIMIT 1
+                """,
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+            return self._cooldown_remaining(row[0] if row else None, cooldown_seconds)
+
+    def _cooldown_remaining(self, timestamp, cooldown_seconds):
+        if not timestamp:
+            return 0
+        try:
+            created = datetime.fromisoformat(timestamp)
+        except (TypeError, ValueError):
+            return 0
+        delta = (datetime.now(timezone.utc) - created).total_seconds()
+        return max(0, int(cooldown_seconds - delta + 0.999))
+
+    async def admin_report_count(self):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM reports WHERE status='open'"
+            )
+            return (await cur.fetchone())[0]
+
+    async def admin_reports_page(self, offset=0, limit=5):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    r.*,
+                    u.tg_id AS reporter_tg_id,
+                    u.nickname AS reporter_nickname
+                FROM reports r
+                JOIN users u ON u.id=r.reporter_id
+                WHERE r.status='open'
+                ORDER BY r.created_at ASC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, max(0, offset)),
+            )
+            return await cur.fetchall()
+
+    async def admin_report(self, report_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    r.*,
+                    u.tg_id AS reporter_tg_id,
+                    u.nickname AS reporter_nickname
+                FROM reports r
+                JOIN users u ON u.id=r.reporter_id
+                WHERE r.id=?
+                """,
+                (report_id,),
+            )
+            return await cur.fetchone()
+
+    async def resolve_report(self, report_id, resolution="resolved"):
+        if resolution not in {"resolved", "dismissed"}:
+            raise ValueError("Unsupported report resolution")
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE reports SET status=? WHERE id=? AND status='open'",
+                (resolution, report_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def set_comment_status(self, cid, status):
+        if status not in {"open", "hidden"}:
+            raise ValueError("Unsupported comment status")
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE comments SET status=? WHERE id=?",
+                (status, cid),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def admin_comment(self, cid):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    c.*,
+                    u.tg_id AS author_tg_id,
+                    u.nickname AS author_nickname,
+                    s.title AS story_title
+                FROM comments c
+                JOIN users u ON u.id=c.author_id
+                JOIN stories s ON s.id=c.story_id
+                WHERE c.id=?
+                """,
+                (cid,),
+            )
+            return await cur.fetchone()
+
     async def admin_stats(self):
         async with aiosqlite.connect(self.path) as db:
             stats = {}
@@ -574,6 +932,8 @@ class DB:
                 "hidden_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='hidden'",
                 "comments": "SELECT COUNT(*) FROM comments",
                 "reactions": "SELECT COUNT(*) FROM reactions",
+                "favorites": "SELECT COUNT(*) FROM favorites",
+                "reports": "SELECT COUNT(*) FROM reports WHERE status='open'",
             }
             for key, sql in queries.items():
                 cur = await db.execute(sql)
@@ -644,7 +1004,7 @@ class DB:
                     s.*,
                     u.tg_id AS author_tg_id,
                     u.nickname AS author_nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.is_demo=0
@@ -664,7 +1024,7 @@ class DB:
                     s.*,
                     u.tg_id AS author_tg_id,
                     u.nickname AS author_nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=? AND s.is_demo=0
