@@ -1,6 +1,7 @@
 import asyncio
 import html
 import os
+import secrets
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
@@ -254,21 +255,22 @@ def feed_options(cat_key="all", sort="new"):
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
     badge = "\n🧪 <i>Пример от Anon Verdict</i>" if story["is_demo"] else ""
-    excerpt = h(story["body"][:900])
-    if len(story["body"]) > 900:
-        excerpt += "…"
+
+    excerpt = str(story["body"]).strip()
+    if len(excerpt) > 320:
+        excerpt = excerpt[:320].rstrip() + "…"
 
     filter_label = FEED_CATEGORIES[cat_key][0]
     sort_label = FEED_SORTS[sort]
+
     return (
-        f"🏛️ <b>ЗАЛ СУДА</b>\n"
+        "🏛️ <b>ЗАЛ СУДА</b>\n"
         f"🏷️ {h(filter_label)} · {h(sort_label)}\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}"
         f"{badge}\n\n"
-        f"<b>{h(story['title'])}</b>\n"
-        f"{excerpt}\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']}\n"
+        f"<b>{h(story['title'])}</b>\n\n"
+        f"{h(excerpt)}\n\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
 
@@ -276,18 +278,12 @@ def feed_card_text(story, index, total, cat_key="all", sort="new"):
 def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
+
     b.button(
         text="📖 Открыть дело",
         callback_data=f"case:{sid}:{index}:{cat_key}:{sort}",
     )
-    b.button(
-        text="🏷️ Категория",
-        callback_data=f"feedcat:{cat_key}:{sort}",
-    )
-    b.button(
-        text="↕️ Сортировка",
-        callback_data=f"feedsort:{cat_key}:{sort}",
-    )
+
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
@@ -296,8 +292,21 @@ def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
         f"{index + 1}/{total}",
         f"feed:{next_i}:{cat_key}:{sort}",
     )
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 2, 3, 1)
+
+    b.button(
+        text="🏷 Фильтр",
+        callback_data=f"feedcat:{cat_key}:{sort}",
+    )
+    b.button(
+        text="↕️ Сортировка",
+        callback_data=f"feedsort:{cat_key}:{sort}",
+    )
+    b.button(
+        text="🎲 Случайное",
+        callback_data=f"random:{index}:{cat_key}:{sort}",
+    )
+
+    b.adjust(1, 3, 2, 1)
     return b.as_markup()
 
 
@@ -306,9 +315,14 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
     total = await db.feed_count(category=category, sort=sort)
     if total == 0:
         b = InlineKeyboardBuilder()
-        b.button(text="🏷️ Сменить категорию", callback_data=f"feedcat:{cat_key}:{sort}")
-        b.button(text="↕️ Сменить сортировку", callback_data=f"feedsort:{cat_key}:{sort}")
-        b.button(text="🏠 Главное меню", callback_data="home")
+        b.button(
+            text="🏷️ Сменить категорию",
+            callback_data=f"feedcat:{cat_key}:{sort}",
+        )
+        b.button(
+            text="↕️ Сменить сортировку",
+            callback_data=f"feedsort:{cat_key}:{sort}",
+        )
         b.adjust(1)
         await safe_edit(
             message,
