@@ -121,9 +121,8 @@ def is_owner(user_id):
 def main_keyboard(user_id=None):
     rows = [
         [KeyboardButton(text="📝 Подать дело"), KeyboardButton(text="🏛️ Зал суда")],
-        [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏆 Рейтинг")],
-        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="⭐ Избранное")],
-        [KeyboardButton(text="🎖️ Звания"), KeyboardButton(text="ℹ️ Как это работает")],
+        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="👤 Мой профиль")],
+        [KeyboardButton(text="⭐ Избранное"), KeyboardButton(text="🏆 Рейтинг")],
     ]
     if is_owner(user_id):
         rows.append([KeyboardButton(text="🛡️ CEO Панель")])
@@ -132,24 +131,23 @@ def main_keyboard(user_id=None):
         keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Выбери действие…",
+        input_field_placeholder="Что открыть?",
     )
 
 
 def home_inline(user_id=None):
     b = InlineKeyboardBuilder()
     b.button(text="🏛️ Зал суда", callback_data="feed:0")
+    b.button(text="📝 Подать дело", callback_data="new")
     b.button(text="⚖️ Мои дела", callback_data="my:0")
-    b.button(text="⭐ Избранное", callback_data="favorites:0")
     b.button(text="👤 Профиль", callback_data="profile")
+    b.button(text="⭐ Избранное", callback_data="favorites:0")
     b.button(text="🏆 Рейтинг", callback_data="rating:0")
-    b.button(text="🎖️ Звания", callback_data="ranks")
-    b.button(text="ℹ️ Как это работает", callback_data="help")
     if is_owner(user_id):
         b.button(text="🛡️ CEO Панель", callback_data="admin:home")
-        b.adjust(2, 2, 2, 1, 1)
-    else:
         b.adjust(2, 2, 2, 1)
+    else:
+        b.adjust(2, 2, 2)
     return b.as_markup()
 
 
@@ -159,13 +157,10 @@ def home_text(user=None):
         role_text = f"\n🛡️ Роль: <b>{h(user['staff_role'])}</b>"
     return (
         "⚖️ <b>ANON VERDICT</b>\n\n"
-        "Анонимный зал жизненных ситуаций.\n"
-        "Рассказывай о том, что происходит, получай мнения со стороны "
-        "и помогай другим своими советами.\n\n"
+        "Анонимно расскажи ситуацию, обсуди её и получи советы со стороны.\n\n"
         "🔒 Автор дела скрыт от других пользователей.\n"
-        "⭐ За полезную активность растёт репутация."
-        f"{role_text}\n\n"
-        "Быстрые кнопки снизу остаются — ими удобно мгновенно открывать нужный раздел."
+        "⭐ Полезные советы повышают репутацию."
+        f"{role_text}"
     )
 
 
@@ -179,6 +174,17 @@ async def safe_edit(message, text, reply_markup=None):
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
+
+
+async def present(message, text, reply_markup=None, edit=True):
+    if edit:
+        await safe_edit(message, text, reply_markup)
+    else:
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
 
 
 async def safe_notify(tg_id, text, reply_markup=None):
@@ -314,7 +320,7 @@ def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
     return b.as_markup()
 
 
-async def render_feed(message, index=0, cat_key="all", sort="new"):
+async def render_feed(message, index=0, cat_key="all", sort="new", edit=True):
     cat_key, sort, category = feed_options(cat_key, sort)
     total = await db.feed_count(category=category, sort=sort)
     if total == 0:
@@ -328,11 +334,12 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
             callback_data=f"feedsort:{cat_key}:{sort}",
         )
         b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "🏛️ <b>ЗАЛ СУДА</b>\n\n"
             "По выбранным фильтрам дел пока нет.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
@@ -342,10 +349,11 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
         index = 0
         story = await db.feed_item(0, category=category, sort=sort)
 
-    await safe_edit(
+    await present(
         message,
         feed_card_text(story, index, total, cat_key, sort),
         feed_keyboard(index, total, story["id"], cat_key, sort),
+        edit=edit,
     )
 
 
@@ -359,7 +367,7 @@ async def render_feed_categories(message, current_cat="all", sort="new"):
             callback_data=f"feed:0:{key}:{sort}",
         )
     b.button(
-        text="⬅️ Назад к ленте",
+        text="⬅️ В Зал суда",
         callback_data=f"feed:0:{current_cat}:{sort}",
     )
     b.adjust(2, 2, 2, 2, 1)
@@ -380,7 +388,7 @@ async def render_feed_sorts(message, cat_key="all", current_sort="new"):
             callback_data=f"feed:0:{cat_key}:{key}",
         )
     b.button(
-        text="⬅️ Назад к ленте",
+        text="⬅️ В Зал суда",
         callback_data=f"feed:0:{cat_key}:{current_sort}",
     )
     b.adjust(1)
@@ -388,7 +396,7 @@ async def render_feed_sorts(message, cat_key="all", current_sort="new"):
         message,
         "↕️ <b>СОРТИРОВКА</b>\n\n"
         "🆕 Новые — свежие дела первыми.\n"
-        "🔥 Популярные — больше обсуждений и просмотров.\n"
+        "🔥 Популярные — больше советов и просмотров.\n"
         "🆘 Без советов — дела, которым ещё никто не ответил.",
         b.as_markup(),
     )
@@ -409,9 +417,8 @@ def case_text(story):
         f"🏷️ {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
-        f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']} · 🗣 Обсуждение: {story['discussion_count']}\n"
-        f"⭐ Сохранений: {story['favorites_count']}"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -431,19 +438,19 @@ def case_keyboard(
     if not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
-            callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}",
-        )
-
-    if story["comments_count"]:
-        b.button(
-            text=f"💬 Советы ({story['comments_count']})",
-            callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     if not story["is_demo"]:
         b.button(
-            text=f"🗣 Обсуждение ({story['discussion_count']})",
-            callback_data=f"discuss:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+            text="🗣 Обсудить",
+            callback_data=f"discuss:{story['id']}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+
+    if story["comments_count"]:
+        b.button(
+            text=f"💬 Советы {story['comments_count']}",
+            callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     b.button(
@@ -452,26 +459,26 @@ def case_keyboard(
     )
     b.button(
         text="🧠 Разбор",
-        callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
 
     if not story["is_demo"] and not own_story:
         b.button(
-            text="🚩 Жалоба",
-            callback_data=f"report:story:{story['id']}",
+            text="•••",
+            callback_data=f"more:s:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
     if back_to == "my":
-        b.button(text="⬅️ К моим делам", callback_data=f"my:{feed_index}")
+        b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
     elif back_to == "favorites":
-        b.button(text="⬅️ К избранному", callback_data=f"favorites:{feed_index}")
+        b.button(text="⬅️ Избранное", callback_data=f"favorites:{feed_index}")
     else:
         b.button(
-            text="⬅️ Назад в ленту",
+            text="⬅️ В Зал суда",
             callback_data=f"feed:{feed_index}:{cat_key}:{sort}",
         )
 
-    b.adjust(2, 2, 1, 1)
+    b.adjust(2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -538,34 +545,41 @@ def comment_keyboard(
     feed_index,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
     b.button(
-        text=f"👍 {comment['likes']}",
-        callback_data=f"react:1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        text=f"👍 Полезно {comment['likes']}",
+        callback_data=f"react:1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text=f"👎 {comment['dislikes']}",
-        callback_data=f"react:-1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"react:-1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
-    b.button(
-        text="🚩 Жалоба",
-        callback_data=f"report:comment:{comment['id']}:{sid}",
-    )
+
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
         b,
-        f"comments:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
+        f"comments:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}:{back_to}",
         f"{index + 1}/{total}",
-        f"comments:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+        f"comments:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
+
+    b.button(
+        text="🗣 Обсудить",
+        callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
+    b.button(
+        text="•••",
+        callback_data=f"more:c:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
-    b.adjust(2, 1, 3, 1)
+    b.adjust(2, 3, 2, 1)
     return b.as_markup()
 
 
@@ -576,16 +590,29 @@ async def render_comments(
     feed_index,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     total = await db.comment_count(sid)
     if total == 0:
         story = await db.story(sid)
+        if story:
+            favorite = await db.favorite_state(message.chat.id, sid)
+            own_story = int(story["author_tg_id"]) == int(message.chat.id)
+            keyboard = case_keyboard(
+                story,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+                favorite=favorite,
+                own_story=own_story,
+            )
+        else:
+            keyboard = home_inline(message.chat.id)
         await safe_edit(
             message,
-            "💬 <b>СОВЕТЫ</b>\n\nПока никто не высказался. Можно стать первым.",
-            case_keyboard(story, feed_index, "feed", cat_key, sort)
-            if story
-            else home_inline(),
+            "💬 <b>СОВЕТЫ</b>\n\nПока советов нет. Можно стать первым.",
+            keyboard,
         )
         return
 
@@ -602,91 +629,119 @@ async def render_comments(
             feed_index,
             cat_key,
             sort,
+            back_to,
         ),
     )
 
 
-def discussion_text(item, index, total):
-    is_author = item["author_id"] == item["story_author_id"]
-    author_label = "👑 Автор" if is_author else h(item["nickname"])
+DISCUSSION_PAGE_SIZE = 3
+DISCUSSION_MARKS = ("①", "②", "③")
 
-    staff = ""
-    if item["staff_role"] and item["staff_role"] != "SYSTEM":
-        staff = f" · 🛡️ {h(item['staff_role'])}"
 
-    reply_block = ""
-    if item["reply_to_id"] and item["reply_body"]:
-        reply_author = (
-            "👑 Автор"
-            if item["reply_author_id"] == item["story_author_id"]
-            else h(item["reply_nickname"] or "участнику")
+def discussion_window_text(rows, offset, total):
+    blocks = ["🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>"]
+    for pos, item in enumerate(rows):
+        mark = DISCUSSION_MARKS[pos]
+        is_author = item["author_id"] == item["story_author_id"]
+        author_label = "👑 Автор" if is_author else h(item["nickname"])
+        staff = ""
+        if item["staff_role"] and item["staff_role"] != "SYSTEM":
+            staff = f" · 🛡️ {h(item['staff_role'])}"
+
+        reply_block = ""
+        if item["reply_to_id"] and item["reply_body"]:
+            reply_author = (
+                "👑 Автор"
+                if item["reply_author_id"] == item["story_author_id"]
+                else h(item["reply_nickname"] or "участнику")
+            )
+            quote = str(item["reply_body"]).strip().replace("\n", " ")
+            if len(quote) > 110:
+                quote = quote[:110].rstrip() + "…"
+            reply_block = f"\n↩️ <i>{reply_author}: {h(quote)}</i>"
+
+        body = str(item["body"]).strip()
+        if len(body) > 650:
+            body = body[:650].rstrip() + "…"
+
+        blocks.append(
+            f"\n{mark} <b>{author_label}</b>{staff}"
+            f"{reply_block}\n{h(body)}\n"
+            f"👍 {item['likes']}"
         )
-        quote = str(item["reply_body"]).strip().replace("\n", " ")
-        if len(quote) > 140:
-            quote = quote[:140].rstrip() + "…"
-        reply_block = (
-            f"\n↩️ <i>Ответ {reply_author}: {h(quote)}</i>\n"
-        )
 
-    return (
-        "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-        f"<b>{author_label}</b>{staff}"
-        f"{reply_block}\n"
-        f"{h(item['body'])}\n\n"
-        f"👍 {item['likes']} · 📄 {index + 1} из {total}"
-    )
+    shown_from = offset + 1
+    shown_to = offset + len(rows)
+    blocks.append(f"\n📄 Сообщения {shown_from}–{shown_to} из {total}")
+    return "\n".join(blocks)
 
 
-def discussion_keyboard(item, sid, index, total, feed_index, cat_key="all", sort="new"):
+def discussion_window_keyboard(
+    rows,
+    sid,
+    offset,
+    total,
+    feed_index,
+    cat_key="all",
+    sort="new",
+    back_to="feed",
+):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
-    b.button(
-        text=f"👍 {item['likes']}",
-        callback_data=f"dlike:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
-    )
-    b.button(
-        text="↩️ Ответить",
-        callback_data=f"dreply:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
-    )
-    b.button(
-        text="🚩 Жалоба",
-        callback_data=f"report:discussion:{item['id']}:{sid}",
-    )
+    for pos, item in enumerate(rows):
+        mark = DISCUSSION_MARKS[pos]
+        b.button(
+            text=f"↩️ {mark}",
+            callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        b.button(
+            text=f"👍 {mark} {item['likes']}",
+            callback_data=f"dlike:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        b.button(
+            text=f"••• {mark}",
+            callback_data=f"more:d:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
 
-    if total > 1:
-        prev_i = (index - 1) % total
-        next_i = (index + 1) % total
-        nav_row(
-            b,
-            f"discuss:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
-            f"{index + 1}/{total}",
-            f"discuss:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+    older_offset = max(0, offset - DISCUSSION_PAGE_SIZE)
+    newer_offset = offset + DISCUSSION_PAGE_SIZE
+    if offset > 0:
+        b.button(
+            text="⬆️ Раньше",
+            callback_data=f"discuss:{sid}:{older_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+    if newer_offset < total:
+        b.button(
+            text="⬇️ Новее",
+            callback_data=f"discuss:{sid}:{newer_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     b.button(
         text="✍️ Написать",
-        callback_data=f"dwrite:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
 
-    if total > 1:
-        b.adjust(2, 1, 3, 1, 1)
-    else:
-        b.adjust(2, 1, 1, 1)
+    rows_layout = [3] * len(rows)
+    if offset > 0 or newer_offset < total:
+        rows_layout.append(2 if offset > 0 and newer_offset < total else 1)
+    rows_layout.extend([1, 1])
+    b.adjust(*rows_layout)
     return b.as_markup()
 
 
 async def render_discussion(
     message,
     sid,
-    index=0,
+    offset=0,
     feed_index=0,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     story = await db.story(sid)
     if not story or story["is_demo"]:
@@ -702,79 +757,98 @@ async def render_discussion(
         b = InlineKeyboardBuilder()
         b.button(
             text="✍️ Начать обсуждение",
-            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
         b.button(
             text="⬅️ К делу",
-            callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         b.adjust(1)
         await safe_edit(
             message,
             "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-            "Пока здесь тихо.\n"
-            "Можно задать вопрос автору, уточнить детали или обсудить ситуацию с другими.",
+            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации.",
             b.as_markup(),
         )
         return
 
-    index = clamp(index, 0, total - 1)
-    item = await db.discussion_item(sid, index)
-    if not item:
-        index = max(0, total - 1)
-        item = await db.discussion_item(sid, index)
+    max_offset = max(0, total - DISCUSSION_PAGE_SIZE)
+    offset = clamp(offset, 0, max_offset)
+    rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
+    if not rows:
+        offset = max_offset
+        rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
 
     await safe_edit(
         message,
-        discussion_text(item, index, total),
-        discussion_keyboard(item, sid, index, total, feed_index, cat_key, sort),
+        discussion_window_text(rows, offset, total),
+        discussion_window_keyboard(
+            rows,
+            sid,
+            offset,
+            total,
+            feed_index,
+            cat_key,
+            sort,
+            back_to,
+        ),
     )
 
 
-async def render_profile(message, user_id):
+async def render_profile(message, user_id, edit=True):
     u = await db.get_user(user_id)
+    stats = await db.profile_stats(user_id)
+
     role = ""
     if u["staff_role"] and u["staff_role"] != "SYSTEM":
         role = f"🛡️ <b>{h(u['staff_role'])}</b>\n"
 
     notifications_on = bool(u["notifications_enabled"])
-    notif_text = "🔔 Уведомления включены" if notifications_on else "🔕 Уведомления выключены"
+    notif_text = "🔔 Включены" if notifications_on else "🔕 Выключены"
+
+    next_thresholds = {1: 10, 2: 30, 3: 75, 4: 150}
+    next_threshold = next_thresholds.get(int(u["level"]))
+    if next_threshold:
+        progress_line = f"📈 До следующего звания: <b>{u['reputation']} / {next_threshold}</b>"
+    else:
+        progress_line = "👑 <b>Максимальное судебное звание</b>"
 
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Изменить профиль", callback_data="edit")
-    b.button(text="⭐ Избранное", callback_data="favorites:0")
+    b.button(text="✏️ Профиль", callback_data="edit")
     b.button(
-        text="🔕 Выключить уведомления" if notifications_on else "🔔 Включить уведомления",
+        text="🔕 Выключить" if notifications_on else "🔔 Включить",
         callback_data="notifications:toggle",
     )
     b.button(text="🎖️ Звания", callback_data="ranks")
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 1, 1, 1)
+    b.button(text="ℹ️ Справка", callback_data="help")
+    b.adjust(2, 2)
 
-    await safe_edit(
+    await present(
         message,
         f"👤 <b>{h(u['nickname'])}</b>\n"
         f"{role}"
-        f"🎖️ {h(u['title'])}\n"
-        f"⭐ Репутация: {u['reputation']}\n"
-        f"📈 Уровень: {u['level']}\n"
+        f"🎖️ {h(u['title'])} · ⭐ <b>{u['reputation']}</b>\n"
+        f"{progress_line}\n\n"
+        f"⚖️ Дел: <b>{stats['stories_count'] if stats else 0}</b> · "
+        f"💬 Советов: <b>{stats['advice_count'] if stats else 0}</b> · "
+        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b>\n"
         f"{notif_text}\n\n"
         f"📝 {h(u['bio'] or 'Описание пока не добавлено.')}",
         b.as_markup(),
+        edit=edit,
     )
 
 
-async def render_my_cases(message, user_id, index=0):
+async def render_my_cases(message, user_id, index=0, edit=True):
     total = await db.user_story_count(user_id)
     if total == 0:
         b = InlineKeyboardBuilder()
         b.button(text="📝 Подать первое дело", callback_data="new")
-        b.button(text="🏠 Главное меню", callback_data="home")
-        b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "⚖️ <b>МОИ ДЕЛА</b>\n\nТы ещё ничего не публиковал.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
@@ -782,62 +856,57 @@ async def render_my_cases(message, user_id, index=0):
     story = await db.user_story_item(user_id, index)
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
-        f"📜 <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"👁 {story['views']} просмотров · 💬 {story['comments_count']} советов\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
     b = InlineKeyboardBuilder()
-    b.button(text="📖 Открыть", callback_data=f"mycase:{story['id']}:{index}")
+    b.button(text="📖 Открыть дело", callback_data=f"mycase:{story['id']}:{index}")
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(b, f"my:{prev_i}", f"{index + 1}/{total}", f"my:{next_i}")
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 3, 1)
-    await safe_edit(message, text, b.as_markup())
+    b.adjust(1, 3)
+    await present(message, text, b.as_markup(), edit=edit)
 
 
-async def render_favorites(message, user_id, index=0):
+async def render_favorites(message, user_id, index=0, edit=True):
     total = await db.favorite_count(user_id)
     if total == 0:
         b = InlineKeyboardBuilder()
         b.button(text="🏛️ Найти дела", callback_data="feed:0")
-        b.button(text="🏠 Главное меню", callback_data="home")
-        b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-            "Здесь будут дела, которые ты сохранил. "
-            "По ним также можно получать уведомления о новых советах.",
+            "Сохраняй интересные дела — сюда попадут их карточки и важные обновления.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
     index = clamp(index, 0, total - 1)
     story = await db.favorite_item(user_id, index)
     if not story:
-        await safe_edit(
+        await present(
             message,
             "⭐ <b>ИЗБРАННОЕ</b>\n\nСписок изменился. Открой его ещё раз.",
             home_inline(user_id),
+            edit=edit,
         )
         return
 
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']}\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
 
     b = InlineKeyboardBuilder()
-    b.button(
-        text="📖 Открыть",
-        callback_data=f"favcase:{story['id']}:{index}",
-    )
+    b.button(text="📖 Открыть дело", callback_data=f"favcase:{story['id']}:{index}")
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
@@ -846,18 +915,18 @@ async def render_favorites(message, user_id, index=0):
         f"{index + 1}/{total}",
         f"favorites:{next_i}",
     )
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 3, 1)
-    await safe_edit(message, text, b.as_markup())
+    b.adjust(1, 3)
+    await present(message, text, b.as_markup(), edit=edit)
 
 
-async def render_rating(message, page=0):
+async def render_rating(message, page=0, edit=True):
     total = await db.leaderboard_count()
     if total == 0:
-        await safe_edit(
+        await present(
             message,
             "🏆 <b>РЕЙТИНГ</b>\n\nПока здесь пусто.",
-            home_inline(),
+            None,
+            edit=edit,
         )
         return
 
@@ -871,7 +940,7 @@ async def render_rating(message, page=0):
         staff = f" · 🛡️ {h(x['staff_role'])}" if x["staff_role"] else ""
         lines.append(
             f"<b>{i}.</b> {h(x['nickname'])} — ⭐ {x['reputation']} · {h(x['title'])}{staff}\n"
-            f"   💬 {x['advice_count']} советов · 👍 {x['helpful_likes']} полезных оценок"
+            f"   💬 {x['advice_count']} · 👍 {x['helpful_likes']}"
         )
 
     b = InlineKeyboardBuilder()
@@ -880,11 +949,12 @@ async def render_rating(message, page=0):
         next_p = (page + 1) % pages
         nav_row(b, f"rating:{prev_p}", f"{page + 1}/{pages}", f"rating:{next_p}")
         b.adjust(3)
-    b.button(text="🏠 Главное меню", callback_data="home")
-    await safe_edit(
+
+    await present(
         message,
         "🏆 <b>РЕЙТИНГ ЗАЛА</b>\n\n" + "\n".join(lines),
         b.as_markup(),
+        edit=edit,
     )
 
 
@@ -900,14 +970,15 @@ def admin_menu():
     return b.as_markup()
 
 
-async def render_admin_home(message):
+async def render_admin_home(message, edit=True):
     reports = await db.admin_report_count()
-    await safe_edit(
+    await present(
         message,
         "🛡️ <b>CEO ANON VERDICT</b>\n\n"
-        "Управление проектом: статистика, пользователи, роли и модерация.\n\n"
+        "Статистика, пользователи, роли и модерация.\n\n"
         f"🚩 Открытых жалоб: <b>{reports}</b>",
         admin_menu(),
+        edit=edit,
     )
 
 
@@ -1352,6 +1423,33 @@ async def case_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("caseback:"))
+async def case_back_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[3] if len(parts) > 3 else "feed"
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    await render_case(
+        c.message,
+        sid,
+        index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer()
+
+
 @dp.callback_query(F.data.startswith("mycase:"))
 async def mycase_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -1371,7 +1469,7 @@ async def discussion_callback(c: CallbackQuery):
     parts = c.data.split(":")
     try:
         sid = int(parts[1])
-        index = int(parts[2])
+        raw_offset = parts[2]
         feed_index = int(parts[3])
     except (ValueError, IndexError):
         await c.answer("Некорректное обсуждение", show_alert=True)
@@ -1379,14 +1477,25 @@ async def discussion_callback(c: CallbackQuery):
 
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
+
+    if raw_offset == "latest":
+        total = await db.discussion_count(sid)
+        offset = max(0, total - DISCUSSION_PAGE_SIZE)
+    else:
+        try:
+            offset = int(raw_offset)
+        except ValueError:
+            offset = 0
 
     await render_discussion(
         c.message,
         sid,
-        index,
+        offset,
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer()
 
@@ -1397,7 +1506,7 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
     parts = c.data.split(":")
     try:
         sid = int(parts[1])
-        index = int(parts[2])
+        offset = int(parts[2])
         feed_index = int(parts[3])
     except (ValueError, IndexError):
         await c.answer("Некорректное обсуждение", show_alert=True)
@@ -1405,6 +1514,7 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.discussion_cooldown_remaining(c.from_user.id)
@@ -1422,16 +1532,18 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
 
     await state.update_data(
         discussion_sid=sid,
-        discussion_index=index,
+        discussion_offset=offset,
         discussion_feed_index=feed_index,
         discussion_cat_key=cat_key,
         discussion_sort=sort,
+        discussion_back_to=back_to,
         discussion_reply_to=None,
     )
     await state.set_state(Discussion.body)
     await c.message.answer(
-        "🗣 Напиши сообщение в обсуждение.\n\n"
-        "Здесь можно задавать вопросы, уточнять детали и отвечать другим участникам."
+        "🗣 <b>Новое сообщение</b>\n\n"
+        "Напиши вопрос, уточнение или мнение.",
+        parse_mode="HTML",
     )
     await c.answer()
 
@@ -1443,7 +1555,7 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
     try:
         message_id = int(parts[1])
         sid = int(parts[2])
-        index = int(parts[3])
+        offset = int(parts[3])
         feed_index = int(parts[4])
     except (ValueError, IndexError):
         await c.answer("Некорректный ответ", show_alert=True)
@@ -1451,6 +1563,7 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[5] if len(parts) > 5 else "all"
     sort = parts[6] if len(parts) > 6 else "new"
+    back_to = parts[7] if len(parts) > 7 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.discussion_cooldown_remaining(c.from_user.id)
@@ -1472,15 +1585,16 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
 
     await state.update_data(
         discussion_sid=sid,
-        discussion_index=index,
+        discussion_offset=offset,
         discussion_feed_index=feed_index,
         discussion_cat_key=cat_key,
         discussion_sort=sort,
+        discussion_back_to=back_to,
         discussion_reply_to=message_id,
     )
     await state.set_state(Discussion.body)
     await c.message.answer(
-        "↩️ <b>Ответ на сообщение:</b>\n"
+        "↩️ <b>Ответ на сообщение</b>\n"
         f"<i>{h(quote)}</i>\n\n"
         "Напиши ответ:",
         parse_mode="HTML",
@@ -1495,7 +1609,7 @@ async def discussion_like_callback(c: CallbackQuery):
     try:
         message_id = int(parts[1])
         sid = int(parts[2])
-        index = int(parts[3])
+        offset = int(parts[3])
         feed_index = int(parts[4])
     except (ValueError, IndexError):
         await c.answer("Некорректная реакция", show_alert=True)
@@ -1503,6 +1617,7 @@ async def discussion_like_callback(c: CallbackQuery):
 
     cat_key = parts[5] if len(parts) > 5 else "all"
     sort = parts[6] if len(parts) > 6 else "new"
+    back_to = parts[7] if len(parts) > 7 else "feed"
 
     result = await db.toggle_discussion_like(c.from_user.id, message_id)
     if result["status"] == "self":
@@ -1515,10 +1630,11 @@ async def discussion_like_callback(c: CallbackQuery):
     await render_discussion(
         c.message,
         sid,
-        index,
+        offset,
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer("👍 Отметка добавлена" if result["liked"] else "👍 Отметка снята")
 
@@ -1539,9 +1655,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
     if not is_owner(m.from_user.id):
         remaining = await db.discussion_cooldown_remaining(m.from_user.id)
         if remaining:
-            await m.answer(
-                f"⏳ Слишком быстро. Подожди ещё {remaining} сек."
-            )
+            await m.answer(f"⏳ Подожди ещё {remaining} сек.")
             return
 
     data = await state.get_data()
@@ -1566,14 +1680,11 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     await state.clear()
 
-    total = await db.discussion_count(sid)
-    latest_index = max(0, total - 1)
-
     feed_index = data.get("discussion_feed_index", 0)
     cat_key = data.get("discussion_cat_key", "all")
     sort = data.get("discussion_sort", "new")
+    back_to = data.get("discussion_back_to", "feed")
 
-    # A direct reply is important enough for an immediate notification.
     reply_tg_id = result.get("reply_tg_id")
     if (
         reply_to
@@ -1584,7 +1695,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
         rb = InlineKeyboardBuilder()
         rb.button(
             text="🗣 Открыть обсуждение",
-            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+            callback_data=f"discuss:{sid}:latest:0:all:new:feed",
         )
         await safe_notify(
             reply_tg_id,
@@ -1595,7 +1706,6 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             rb.as_markup(),
         )
 
-    # Followers are notified only when the case author speaks.
     if result.get("is_story_author"):
         followers = await db.favorite_subscribers(
             sid,
@@ -1605,7 +1715,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             rb = InlineKeyboardBuilder()
             rb.button(
                 text="🗣 Открыть обсуждение",
-                callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+                callback_data=f"discuss:{sid}:latest:0:all:new:feed",
             )
             asyncio.create_task(
                 notify_many(
@@ -1619,18 +1729,19 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(
-        text="🗣 Открыть обсуждение",
-        callback_data=f"discuss:{sid}:{latest_index}:{feed_index}:{cat_key}:{sort}",
+        text="🗣 К обсуждению",
+        callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
     b.adjust(1)
 
     await m.answer(
-        "✅ Сообщение опубликовано в обсуждении.\n\n"
-        "Репутация за обычные сообщения обсуждения не начисляется.",
+        "✅ Сообщение опубликовано.\n"
+        "<i>Обсуждение не начисляет репутацию.</i>",
+        parse_mode="HTML",
         reply_markup=b.as_markup(),
     )
 
@@ -1648,6 +1759,8 @@ async def comments_callback(c: CallbackQuery):
         return
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
+
     await render_comments(
         c.message,
         sid,
@@ -1655,6 +1768,7 @@ async def comments_callback(c: CallbackQuery):
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer()
 
@@ -1675,6 +1789,7 @@ async def react_callback(c: CallbackQuery):
 
     cat_key = parts[6] if len(parts) > 6 else "all"
     sort = parts[7] if len(parts) > 7 else "new"
+    back_to = parts[8] if len(parts) > 8 else "feed"
 
     result = await db.react(c.from_user.id, cid, value)
     if result["status"] == "self":
@@ -1694,6 +1809,7 @@ async def react_callback(c: CallbackQuery):
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
 
     delta = result.get("reputation_delta", 0)
@@ -1707,7 +1823,7 @@ async def react_callback(c: CallbackQuery):
             rb = InlineKeyboardBuilder()
             rb.button(
                 text="💬 Открыть советы",
-                callback_data=f"comments:{sid}:0:0:all:new",
+                callback_data=f"comments:{sid}:0:0:all:new:feed",
             )
             await safe_notify(
                 result["author_tg_id"],
@@ -1735,6 +1851,7 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[3] if len(parts) > 3 else "all"
     sort = parts[4] if len(parts) > 4 else "new"
+    back_to = parts[5] if len(parts) > 5 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.comment_cooldown_remaining(c.from_user.id)
@@ -1747,16 +1864,10 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 
     story = await db.story(sid)
     if not story or story["is_demo"]:
-        await c.answer(
-            "К демонстрационным делам советы не добавляются.",
-            show_alert=True,
-        )
+        await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
         return
     if int(story["author_tg_id"]) == int(c.from_user.id):
-        await c.answer(
-            "Нельзя давать советы собственному делу.",
-            show_alert=True,
-        )
+        await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
         return
 
     await state.update_data(
@@ -1764,11 +1875,13 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
         feed_index=feed_index,
         cat_key=cat_key,
         sort=sort,
+        back_to=back_to,
     )
     await state.set_state(Comment.body)
     await c.message.answer(
-        "💬 Напиши совет или мнение.\n\n"
-        "Лучше объяснить свою мысль, а не просто вынести вердикт."
+        "💬 <b>Твой совет</b>\n\n"
+        "Напиши конкретно, что бы ты сделал на месте автора и почему.",
+        parse_mode="HTML",
     )
     await c.answer()
 
@@ -1789,7 +1902,7 @@ async def comment(m: Message, state: FSMContext):
         remaining = await db.comment_cooldown_remaining(m.from_user.id)
         if remaining:
             await m.answer(
-                f"⏳ Слишком быстро. Подожди ещё {remaining} сек. перед следующим советом."
+                f"⏳ Подожди ещё {remaining} сек. перед следующим советом."
             )
             return
 
@@ -1801,6 +1914,7 @@ async def comment(m: Message, state: FSMContext):
     cat_key = d.get("cat_key", "all")
     sort = d.get("sort", "new")
     feed_index = d.get("feed_index", 0)
+    back_to = d.get("back_to", "feed")
 
     open_case = InlineKeyboardBuilder()
     open_case.button(
@@ -1839,18 +1953,23 @@ async def comment(m: Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(
-        text="⬅️ К делу",
-        callback_data=f"case:{d['sid']}:{feed_index}:{cat_key}:{sort}",
+        text="💬 Открыть советы",
+        callback_data=f"comments:{d['sid']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"caseback:{d['sid']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
     reward = int(result.get("reputation_reward", 0))
     reward_line = (
         f"<b>+{reward} репутации.</b>"
         if reward
-        else "Повторный совет к этому делу репутацию не начисляет."
+        else "За повторный совет к этому делу репутация не начисляется."
     )
     await m.answer(
-        "✅ Совет опубликован. " + reward_line + "\n\n"
-        "Если другие участники поставят 👍, репутация автора совета тоже вырастет.\n\n"
+        "✅ <b>Совет опубликован.</b> " + reward_line + "\n\n"
         f"🎖️ {h(u['title'])} · ⭐ {u['reputation']}",
         parse_mode="HTML",
         reply_markup=b.as_markup(),
@@ -1870,6 +1989,7 @@ async def ai_callback(c: CallbackQuery):
 
     cat_key = parts[3] if len(parts) > 3 else "all"
     sort = parts[4] if len(parts) > 4 else "new"
+    back_to = parts[5] if len(parts) > 5 else "feed"
 
     story = await db.story(sid)
     if not story:
@@ -1880,7 +2000,7 @@ async def ai_callback(c: CallbackQuery):
     b = InlineKeyboardBuilder()
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
     await safe_edit(
         c.message,
@@ -2009,6 +2129,94 @@ async def favorite_toggle_callback(c: CallbackQuery):
     )
 
 
+@dp.callback_query(F.data.startswith("more:"))
+async def more_menu_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    if len(parts) < 3:
+        await c.answer("Некорректное меню", show_alert=True)
+        return
+
+    target_type = {"s": "story", "c": "comment", "d": "discussion"}.get(parts[1], parts[1])
+    b = InlineKeyboardBuilder()
+
+    if target_type == "story":
+        try:
+            sid = int(parts[2])
+            feed_index = int(parts[3])
+        except (ValueError, IndexError):
+            await c.answer("Некорректное дело", show_alert=True)
+            return
+        back_to = parts[4] if len(parts) > 4 else "feed"
+        cat_key = parts[5] if len(parts) > 5 else "all"
+        sort = parts[6] if len(parts) > 6 else "new"
+
+        b.button(text="🚩 Пожаловаться", callback_data=f"report:story:{sid}")
+        b.button(
+            text="⬅️ К делу",
+            callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С ДЕЛОМ</b>"
+
+    elif target_type == "comment":
+        try:
+            cid = int(parts[2])
+            sid = int(parts[3])
+            index = int(parts[4])
+            feed_index = int(parts[5])
+        except (ValueError, IndexError):
+            await c.answer("Некорректный совет", show_alert=True)
+            return
+        cat_key = parts[6] if len(parts) > 6 else "all"
+        sort = parts[7] if len(parts) > 7 else "new"
+        back_to = parts[8] if len(parts) > 8 else "feed"
+
+        target = await db.admin_comment(cid)
+        if target and int(target["author_tg_id"]) != int(c.from_user.id):
+            b.button(text="🚩 Пожаловаться", callback_data=f"report:comment:{cid}:{sid}")
+        b.button(
+            text="⬅️ К совету",
+            callback_data=f"comments:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С СОВЕТОМ</b>"
+
+    elif target_type == "discussion":
+        try:
+            message_id = int(parts[2])
+            sid = int(parts[3])
+            offset = int(parts[4])
+            feed_index = int(parts[5])
+        except (ValueError, IndexError):
+            await c.answer("Некорректное сообщение", show_alert=True)
+            return
+        cat_key = parts[6] if len(parts) > 6 else "all"
+        sort = parts[7] if len(parts) > 7 else "new"
+        back_to = parts[8] if len(parts) > 8 else "feed"
+
+        target = await db.discussion_message(message_id)
+        if target and int(target["author_tg_id"]) != int(c.from_user.id):
+            b.button(
+                text="🚩 Пожаловаться",
+                callback_data=f"report:discussion:{message_id}:{sid}",
+            )
+        b.button(
+            text="⬅️ К обсуждению",
+            callback_data=f"discuss:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С СООБЩЕНИЕМ</b>"
+    else:
+        await c.answer("Некорректное меню", show_alert=True)
+        return
+
+    b.adjust(1)
+    await safe_edit(
+        c.message,
+        title + "\n\nВторостепенные действия находятся здесь, чтобы не перегружать основной экран.",
+        b.as_markup(),
+    )
+    await c.answer()
+
+
 @dp.callback_query(F.data == "notifications:toggle")
 async def notifications_toggle_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -2071,7 +2279,7 @@ async def report_menu_callback(c: CallbackQuery):
     else:
         b.button(
             text="⬅️ К обсуждению",
-            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+            callback_data=f"discuss:{sid}:latest:0:all:new:feed",
         )
     b.adjust(1)
 
@@ -2158,9 +2366,9 @@ async def report_submit_callback(c: CallbackQuery):
             f"case:{sid}:0:all:new"
             if target_type == "story"
             else (
-                f"comments:{sid}:0:0:all:new"
+                f"comments:{sid}:0:0:all:new:feed"
                 if target_type == "comment"
-                else f"discuss:{sid}:0:0:all:new"
+                else f"discuss:{sid}:latest:0:all:new:feed"
             )
         ),
     )
@@ -2188,8 +2396,7 @@ async def rating_callback(c: CallbackQuery):
 async def ranks_callback(c: CallbackQuery):
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Профиль", callback_data="profile")
-    b.button(text="🏠 Главное меню", callback_data="home")
+    b.button(text="⬅️ В профиль", callback_data="profile")
     b.adjust(1)
     await safe_edit(
         c.message,
@@ -2199,7 +2406,7 @@ async def ranks_callback(c: CallbackQuery):
         "⚖️ Судья — 30+\n"
         "🏛️ Старший судья — 75+\n"
         "👑 Верховный судья — 150+\n\n"
-        "⭐ Опубликованный совет даёт +2 репутации.\n"
+        "⭐ Первый совет к каждому чужому делу даёт +2 репутации.\n"
         "👍 Каждый уникальный лайк от другого пользователя даёт автору совета ещё +1.\n"
         "👎 Дизлайк сам по себе репутацию не отнимает.\n"
         "🛡️ Роли команды Anon Verdict существуют отдельно от судебных званий.",
@@ -2212,7 +2419,7 @@ async def ranks_callback(c: CallbackQuery):
 async def help_callback(c: CallbackQuery):
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
-    b.button(text="🏠 Главное меню", callback_data="home")
+    b.button(text="⬅️ В профиль", callback_data="profile")
     await safe_edit(
         c.message,
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
@@ -2223,8 +2430,8 @@ async def help_callback(c: CallbackQuery):
         "💬 <b>Советы</b> — отдельные рекомендации, которые влияют на репутацию.\n"
         "🗣 <b>Обсуждение</b> — вопросы, уточнения и ответы внутри каждого дела без фарма репутации.\n"
         "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
-        "⭐ <b>Избранное</b> — сохраняй дела и получай уведомления о новых советах.\n"
-        "🚩 На неподходящее дело или совет можно отправить жалобу.\n"
+        "⭐ <b>Избранное</b> — сохраняй дела и получай важные обновления.\n"
+        "••• Жалобы спрятаны во второстепенное меню, чтобы не перегружать карточки.\n"
         "🏆 <b>Рейтинг</b> учитывает репутацию и полезные оценки советов.\n"
         "⭐ Первый совет к делу даёт +2 репутации, каждый уникальный 👍 — ещё +1.\n"
         "⏳ Антиспам ограничивает слишком частые публикации.\n\n"
@@ -2237,36 +2444,31 @@ async def help_callback(c: CallbackQuery):
 @dp.message(F.text == "🏛️ Зал суда")
 async def menu_feed(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("🏛️ Открываю Зал суда…", parse_mode="HTML")
-    await render_feed(msg, 0)
+    await render_feed(m, 0, edit=False)
 
 
 @dp.message(F.text == "👤 Мой профиль")
 async def menu_profile(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("👤 Открываю профиль…")
-    await render_profile(msg, m.from_user.id)
+    await render_profile(m, m.from_user.id, edit=False)
 
 
 @dp.message(F.text == "🏆 Рейтинг")
 async def menu_rating(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("🏆 Открываю рейтинг…")
-    await render_rating(msg, 0)
+    await render_rating(m, 0, edit=False)
 
 
 @dp.message(F.text == "⚖️ Мои дела")
 async def menu_my_cases(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("⚖️ Открываю твои дела…")
-    await render_my_cases(msg, m.from_user.id, 0)
+    await render_my_cases(m, m.from_user.id, 0, edit=False)
 
 
 @dp.message(F.text == "⭐ Избранное")
 async def menu_favorites(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("⭐ Открываю избранное…")
-    await render_favorites(msg, m.from_user.id, 0)
+    await render_favorites(m, m.from_user.id, 0, edit=False)
 
 
 @dp.message(F.text == "🎖️ Звания")
@@ -2337,14 +2539,7 @@ async def menu_new(m: Message, state: FSMContext):
 @dp.message(Command("profile"))
 async def profile_command(m: Message):
     await ensure_message_user(m)
-    u = await db.get_user(m.from_user.id)
-    await m.answer(
-        f"👤 <b>{h(u['nickname'])}</b>\n"
-        f"🎖️ {h(u['title'])}\n"
-        f"⭐ {u['reputation']}",
-        parse_mode="HTML",
-        reply_markup=main_keyboard(m.from_user.id),
-    )
+    await render_profile(m, m.from_user.id, edit=False)
 
 
 @dp.message(F.text == "🛡️ CEO Панель")
@@ -2355,8 +2550,7 @@ async def admin_entry(m: Message, state: FSMContext):
         await m.answer("Раздел доступен только владельцу проекта.")
         return
     await state.clear()
-    msg = await m.answer("🛡️ Открываю CEO-панель…")
-    await render_admin_home(msg)
+    await render_admin_home(m, edit=False)
 
 
 @dp.callback_query(F.data == "admin:home")
