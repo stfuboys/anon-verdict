@@ -367,7 +367,7 @@ async def render_feed_categories(message, current_cat="all", sort="new"):
             callback_data=f"feed:0:{key}:{sort}",
         )
     b.button(
-        text="⬅️ Назад к ленте",
+        text="⬅️ В Зал суда",
         callback_data=f"feed:0:{current_cat}:{sort}",
     )
     b.adjust(2, 2, 2, 2, 1)
@@ -388,7 +388,7 @@ async def render_feed_sorts(message, cat_key="all", current_sort="new"):
             callback_data=f"feed:0:{cat_key}:{key}",
         )
     b.button(
-        text="⬅️ Назад к ленте",
+        text="⬅️ В Зал суда",
         callback_data=f"feed:0:{cat_key}:{current_sort}",
     )
     b.adjust(1)
@@ -396,7 +396,7 @@ async def render_feed_sorts(message, cat_key="all", current_sort="new"):
         message,
         "↕️ <b>СОРТИРОВКА</b>\n\n"
         "🆕 Новые — свежие дела первыми.\n"
-        "🔥 Популярные — больше обсуждений и просмотров.\n"
+        "🔥 Популярные — больше советов и просмотров.\n"
         "🆘 Без советов — дела, которым ещё никто не ответил.",
         b.as_markup(),
     )
@@ -816,7 +816,7 @@ async def render_profile(message, user_id, edit=True):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Профиль", callback_data="edit")
     b.button(
-        text="🔕 Уведомления" if notifications_on else "🔔 Уведомления",
+        text="🔕 Выключить" if notifications_on else "🔔 Включить",
         callback_data="notifications:toggle",
     )
     b.button(text="🎖️ Звания", callback_data="ranks")
@@ -970,14 +970,15 @@ def admin_menu():
     return b.as_markup()
 
 
-async def render_admin_home(message):
+async def render_admin_home(message, edit=True):
     reports = await db.admin_report_count()
-    await safe_edit(
+    await present(
         message,
         "🛡️ <b>CEO ANON VERDICT</b>\n\n"
-        "Управление проектом: статистика, пользователи, роли и модерация.\n\n"
+        "Статистика, пользователи, роли и модерация.\n\n"
         f"🚩 Открытых жалоб: <b>{reports}</b>",
         admin_menu(),
+        edit=edit,
     )
 
 
@@ -2545,8 +2546,7 @@ async def admin_entry(m: Message, state: FSMContext):
         await m.answer("Раздел доступен только владельцу проекта.")
         return
     await state.clear()
-    msg = await m.answer("🛡️ Открываю CEO-панель…")
-    await render_admin_home(msg)
+    await render_admin_home(m, edit=False)
 
 
 @dp.callback_query(F.data == "admin:home")
