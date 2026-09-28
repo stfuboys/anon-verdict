@@ -1854,6 +1854,7 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[3] if len(parts) > 3 else "all"
     sort = parts[4] if len(parts) > 4 else "new"
+    back_to = parts[5] if len(parts) > 5 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.comment_cooldown_remaining(c.from_user.id)
@@ -1866,16 +1867,10 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 
     story = await db.story(sid)
     if not story or story["is_demo"]:
-        await c.answer(
-            "К демонстрационным делам советы не добавляются.",
-            show_alert=True,
-        )
+        await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
         return
     if int(story["author_tg_id"]) == int(c.from_user.id):
-        await c.answer(
-            "Нельзя давать советы собственному делу.",
-            show_alert=True,
-        )
+        await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
         return
 
     await state.update_data(
@@ -1883,11 +1878,13 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
         feed_index=feed_index,
         cat_key=cat_key,
         sort=sort,
+        back_to=back_to,
     )
     await state.set_state(Comment.body)
     await c.message.answer(
-        "💬 Напиши совет или мнение.\n\n"
-        "Лучше объяснить свою мысль, а не просто вынести вердикт."
+        "💬 <b>Твой совет</b>\n\n"
+        "Напиши конкретно, что бы ты сделал на месте автора и почему.",
+        parse_mode="HTML",
     )
     await c.answer()
 
@@ -1908,7 +1905,7 @@ async def comment(m: Message, state: FSMContext):
         remaining = await db.comment_cooldown_remaining(m.from_user.id)
         if remaining:
             await m.answer(
-                f"⏳ Слишком быстро. Подожди ещё {remaining} сек. перед следующим советом."
+                f"⏳ Подожди ещё {remaining} сек. перед следующим советом."
             )
             return
 
@@ -1920,6 +1917,7 @@ async def comment(m: Message, state: FSMContext):
     cat_key = d.get("cat_key", "all")
     sort = d.get("sort", "new")
     feed_index = d.get("feed_index", 0)
+    back_to = d.get("back_to", "feed")
 
     open_case = InlineKeyboardBuilder()
     open_case.button(
@@ -1958,18 +1956,23 @@ async def comment(m: Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(
-        text="⬅️ К делу",
-        callback_data=f"case:{d['sid']}:{feed_index}:{cat_key}:{sort}",
+        text="💬 Открыть советы",
+        callback_data=f"comments:{d['sid']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"caseback:{d['sid']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
     reward = int(result.get("reputation_reward", 0))
     reward_line = (
         f"<b>+{reward} репутации.</b>"
         if reward
-        else "Повторный совет к этому делу репутацию не начисляет."
+        else "За повторный совет к этому делу репутация не начисляется."
     )
     await m.answer(
-        "✅ Совет опубликован. " + reward_line + "\n\n"
-        "Если другие участники поставят 👍, репутация автора совета тоже вырастет.\n\n"
+        "✅ <b>Совет опубликован.</b> " + reward_line + "\n\n"
         f"🎖️ {h(u['title'])} · ⭐ {u['reputation']}",
         parse_mode="HTML",
         reply_markup=b.as_markup(),
@@ -1989,6 +1992,7 @@ async def ai_callback(c: CallbackQuery):
 
     cat_key = parts[3] if len(parts) > 3 else "all"
     sort = parts[4] if len(parts) > 4 else "new"
+    back_to = parts[5] if len(parts) > 5 else "feed"
 
     story = await db.story(sid)
     if not story:
@@ -1999,7 +2003,7 @@ async def ai_callback(c: CallbackQuery):
     b = InlineKeyboardBuilder()
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
     await safe_edit(
         c.message,
