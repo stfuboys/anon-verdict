@@ -106,3 +106,12 @@ Case authors can manage the lifecycle of their own real cases.
 - destructive deletion requires confirmation
 - owner controls are exposed through a dedicated case management screen
 - moderation hiding preserves the case's previous open/completed state for safe restoration
+
+
+## Case updates and advice inbox v10
+
+- case authors can append situation updates without overwriting the original story
+- saved-case subscribers are notified when the author posts an update
+- owner advice notifications are aggregated into one editable Telegram message per case
+- opening the advice pager marks current answers as read and refreshes the aggregate card
+- advice remains a one-card pager with previous/current/next navigation
