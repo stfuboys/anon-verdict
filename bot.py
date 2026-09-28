@@ -1907,6 +1907,11 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
             )
             return
 
+    story = await db.story(sid)
+    if not story or story["status"] != "open":
+        await c.answer("Дело завершено. Новые ответы в обсуждении закрыты.", show_alert=True)
+        return
+
     parent = await db.discussion_message(message_id)
     if not parent or int(parent["story_id"]) != sid or parent["status"] != "open":
         await c.answer("Сообщение уже недоступно.", show_alert=True)
@@ -2212,6 +2217,9 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
     if not story or story["is_demo"]:
         await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
         return
+    if story["status"] != "open":
+        await c.answer("Дело завершено. Новые советы больше не принимаются.", show_alert=True)
+        return
     if int(story["author_tg_id"]) == int(c.from_user.id):
         await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
         return
@@ -2265,6 +2273,19 @@ async def comment(m: Message, state: FSMContext):
     d = await state.get_data()
     result = await db.comment(m.from_user.id, d["sid"], text)
     await state.clear()
+
+    if result.get("status") == "story_closed":
+        b = InlineKeyboardBuilder()
+        b.button(text="📖 К делу", callback_data=f"caseback:{d['sid']}:0:feed:all:new")
+        await m.answer(
+            "✅ Дело уже завершено автором. Этот совет не был опубликован.",
+            reply_markup=b.as_markup(),
+        )
+        return
+    if result.get("status") != "created":
+        await m.answer("Не удалось опубликовать совет. Дело недоступно.")
+        return
+
     u = await db.get_user(m.from_user.id)
 
     cat_key = d.get("cat_key", "all")
