@@ -481,6 +481,10 @@ class DB:
         )
 
     async def create_story(self, tg_id, category, title, body):
+        body = (body or "").strip()
+        if len(body) < 30:
+            raise ValueError("Story body must be at least 30 characters")
+
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
             row = await cur.fetchone()
@@ -1698,14 +1702,14 @@ class DB:
                 )
             else:
                 await db.execute(
-                    "UPDATE stories SET status='closed' WHERE id=?",
+                    "UPDATE stories SET status='closed', best_comment_id=NULL WHERE id=?",
                     (sid,),
                 )
 
             await db.commit()
             result = {
                 "status": "updated",
-                "best_comment_id": comment_id if comment_id is not None else story["best_comment_id"],
+                "best_comment_id": comment_id,
             }
             if selected:
                 result["best_author_tg_id"] = selected["author_tg_id"]
