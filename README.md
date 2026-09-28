@@ -39,3 +39,17 @@ Current owner-only controls:
 - hide a case from the public court or restore it
 
 All admin callbacks verify the owner Telegram ID server-side. Team labels do not grant CEO permissions.
+
+
+## Community v3
+
+The bot now includes:
+- paginated favorites that also act as lightweight subscriptions
+- notifications for new advice on your case, updates to saved cases, and useful likes
+- user-controlled notification toggle in profile
+- reports for cases and advice with a private CEO moderation queue
+- anti-spam cooldowns for new cases and advice
+- anti-farming rules: users cannot advise their own case, and only the first advice to the same case earns the +2 posting reward
+- richer leaderboard context with advice counts and helpful likes
+
+Moderation actions are restricted to the configured `OWNER_TG_ID`.
