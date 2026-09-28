@@ -177,13 +177,13 @@ async def ensure_callback_user(c: CallbackQuery):
     await db.ensure_user(c.from_user.id, c.from_user.username)
 
 
-async def send_feed(target):
+async def send_feed(target, user_id=None):
     rows = await db.latest()
     if not rows:
         await target.answer(
             "🏛️ <b>Зал суда пока пуст</b>\n\nПодай первое дело — оно появится здесь анонимно.",
             parse_mode="HTML",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard(user_id),
         )
         return
 
@@ -357,7 +357,7 @@ async def ranks(c: CallbackQuery):
 @dp.callback_query(F.data == "feed")
 async def feed(c: CallbackQuery):
     await ensure_callback_user(c)
-    await send_feed(c.message)
+    await send_feed(c.message, c.from_user.id)
     await c.answer()
 
 
@@ -584,7 +584,7 @@ async def menu_new(m: Message, state: FSMContext):
 @dp.message(F.text == "🏛️ Зал суда")
 async def menu_feed(m: Message):
     await ensure_message_user(m)
-    await send_feed(m)
+    await send_feed(m, m.from_user.id)
 
 
 @dp.message(F.text == "👤 Мой профиль")
@@ -679,7 +679,7 @@ async def menu_help(m: Message):
         "⭐ <b>Репутация</b> → повышает судебное звание.\n\n"
         "🧪 Примеры от Anon Verdict всегда помечены и не выдаются за реальные истории.",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
