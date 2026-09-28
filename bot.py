@@ -2171,7 +2171,9 @@ async def more_menu_callback(c: CallbackQuery):
         sort = parts[7] if len(parts) > 7 else "new"
         back_to = parts[8] if len(parts) > 8 else "feed"
 
-        b.button(text="🚩 Пожаловаться", callback_data=f"report:comment:{cid}:{sid}")
+        target = await db.admin_comment(cid)
+        if target and int(target["author_tg_id"]) != int(c.from_user.id):
+            b.button(text="🚩 Пожаловаться", callback_data=f"report:comment:{cid}:{sid}")
         b.button(
             text="⬅️ К совету",
             callback_data=f"comments:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -2191,10 +2193,12 @@ async def more_menu_callback(c: CallbackQuery):
         sort = parts[7] if len(parts) > 7 else "new"
         back_to = parts[8] if len(parts) > 8 else "feed"
 
-        b.button(
-            text="🚩 Пожаловаться",
-            callback_data=f"report:discussion:{message_id}:{sid}",
-        )
+        target = await db.discussion_message(message_id)
+        if target and int(target["author_tg_id"]) != int(c.from_user.id):
+            b.button(
+                text="🚩 Пожаловаться",
+                callback_data=f"report:discussion:{message_id}:{sid}",
+            )
         b.button(
             text="⬅️ К обсуждению",
             callback_data=f"discuss:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
