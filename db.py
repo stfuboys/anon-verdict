@@ -114,6 +114,23 @@ class DB:
                   created_at TEXT NOT NULL,
                   PRIMARY KEY(user_id, story_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS discussion_messages(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  story_id INTEGER NOT NULL,
+                  author_id INTEGER NOT NULL,
+                  body TEXT NOT NULL,
+                  reply_to_id INTEGER,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS discussion_reactions(
+                  user_id INTEGER NOT NULL,
+                  message_id INTEGER NOT NULL,
+                  value INTEGER NOT NULL DEFAULT 1,
+                  PRIMARY KEY(user_id, message_id)
+                );
                 """
             )
 
@@ -144,6 +161,12 @@ class DB:
                   ON reports(status, created_at);
                 CREATE INDEX IF NOT EXISTS idx_story_views_story
                   ON story_views(story_id);
+                CREATE INDEX IF NOT EXISTS idx_discussion_story
+                  ON discussion_messages(story_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_discussion_reply
+                  ON discussion_messages(reply_to_id);
+                CREATE INDEX IF NOT EXISTS idx_discussion_reactions_message
+                  ON discussion_reactions(message_id, value);
                 """
             )
 
@@ -382,7 +405,8 @@ class DB:
                     u.nickname,
                     u.tg_id AS author_tg_id,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
-                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -441,7 +465,8 @@ class DB:
                     s.*,
                     u.nickname,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
-                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE {where_sql}
@@ -473,7 +498,8 @@ class DB:
                 SELECT
                     s.*,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
-                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE u.tg_id=? AND s.is_demo=0
@@ -694,6 +720,222 @@ class DB:
             )
             return await cur.fetchall()
 
+    async def discussion_count(self, sid):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM discussion_messages WHERE story_id=? AND status='open'",
+                (sid,),
+            )
+            return (await cur.fetchone())[0]
+
+    async def discussion_item(self, sid, offset=0):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    d.*,
+                    u.nickname,
+                    u.staff_role,
+                    u.tg_id AS author_tg_id,
+                    s.author_id AS story_author_id,
+                    parent.body AS reply_body,
+                    parent.author_id AS reply_author_id,
+                    parent_u.nickname AS reply_nickname,
+                    (SELECT COUNT(*) FROM discussion_reactions r
+                     WHERE r.message_id=d.id AND r.value=1) AS likes
+                FROM discussion_messages d
+                JOIN users u ON u.id=d.author_id
+                JOIN stories s ON s.id=d.story_id
+                LEFT JOIN discussion_messages parent
+                  ON parent.id=d.reply_to_id AND parent.status='open'
+                LEFT JOIN users parent_u ON parent_u.id=parent.author_id
+                WHERE d.story_id=? AND d.status='open'
+                ORDER BY d.created_at ASC, d.id ASC
+                LIMIT 1 OFFSET ?
+                """,
+                (sid, max(0, offset)),
+            )
+            return await cur.fetchone()
+
+    async def discussion_message(self, message_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    d.*,
+                    u.nickname,
+                    u.tg_id AS author_tg_id,
+                    u.notifications_enabled,
+                    s.title AS story_title,
+                    s.author_id AS story_author_id
+                FROM discussion_messages d
+                JOIN users u ON u.id=d.author_id
+                JOIN stories s ON s.id=d.story_id
+                WHERE d.id=?
+                """,
+                (message_id,),
+            )
+            return await cur.fetchone()
+
+    async def add_discussion_message(self, tg_id, sid, body, reply_to_id=None):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id, nickname, notifications_enabled FROM users WHERE tg_id=?",
+                (tg_id,),
+            )
+            user = await cur.fetchone()
+            if not user:
+                raise RuntimeError("User must be initialized before discussion")
+
+            cur = await db.execute(
+                """
+                SELECT s.author_id, s.title, u.tg_id AS owner_tg_id, u.notifications_enabled AS owner_notifications
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=? AND s.status='open' AND s.is_demo=0
+                """,
+                (sid,),
+            )
+            story = await cur.fetchone()
+            if not story:
+                return {"status": "story_not_found"}
+
+            reply = None
+            if reply_to_id is not None:
+                cur = await db.execute(
+                    """
+                    SELECT d.id, d.author_id, u.tg_id AS reply_tg_id,
+                           u.notifications_enabled AS reply_notifications
+                    FROM discussion_messages d
+                    JOIN users u ON u.id=d.author_id
+                    WHERE d.id=? AND d.story_id=? AND d.status='open'
+                    """,
+                    (reply_to_id, sid),
+                )
+                reply = await cur.fetchone()
+                if not reply:
+                    return {"status": "reply_not_found"}
+
+            cur = await db.execute(
+                """
+                INSERT INTO discussion_messages(
+                    story_id, author_id, body, reply_to_id, status, created_at
+                )
+                VALUES(?,?,?,?, 'open', ?)
+                """,
+                (sid, user["id"], body[:1200], reply_to_id, now()),
+            )
+            message_id = cur.lastrowid
+            await db.commit()
+
+            return {
+                "status": "created",
+                "message_id": message_id,
+                "author_id": user["id"],
+                "author_tg_id": tg_id,
+                "author_nickname": user["nickname"],
+                "is_story_author": user["id"] == story["author_id"],
+                "story_title": story["title"],
+                "owner_tg_id": story["owner_tg_id"],
+                "owner_notifications": bool(story["owner_notifications"]),
+                "reply_tg_id": reply["reply_tg_id"] if reply else None,
+                "reply_notifications": bool(reply["reply_notifications"]) if reply else False,
+            }
+
+    async def toggle_discussion_like(self, tg_id, message_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
+            user = await cur.fetchone()
+            if not user:
+                return {"status": "user_not_found"}
+
+            cur = await db.execute(
+                """
+                SELECT d.author_id, d.story_id
+                FROM discussion_messages d
+                WHERE d.id=? AND d.status='open'
+                """,
+                (message_id,),
+            )
+            msg = await cur.fetchone()
+            if not msg:
+                return {"status": "not_found"}
+            if msg["author_id"] == user["id"]:
+                return {"status": "self"}
+
+            cur = await db.execute(
+                "SELECT 1 FROM discussion_reactions WHERE user_id=? AND message_id=?",
+                (user["id"], message_id),
+            )
+            exists = await cur.fetchone()
+            if exists:
+                await db.execute(
+                    "DELETE FROM discussion_reactions WHERE user_id=? AND message_id=?",
+                    (user["id"], message_id),
+                )
+                liked = False
+            else:
+                await db.execute(
+                    """
+                    INSERT INTO discussion_reactions(user_id, message_id, value)
+                    VALUES(?,?,1)
+                    """,
+                    (user["id"], message_id),
+                )
+                liked = True
+            await db.commit()
+            return {"status": "updated", "liked": liked, "story_id": msg["story_id"]}
+
+    async def discussion_cooldown_remaining(self, tg_id, cooldown_seconds=8):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT d.created_at
+                FROM discussion_messages d
+                JOIN users u ON u.id=d.author_id
+                WHERE u.tg_id=?
+                ORDER BY d.created_at DESC
+                LIMIT 1
+                """,
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+            return self._cooldown_remaining(row[0] if row else None, cooldown_seconds)
+
+    async def set_discussion_status(self, message_id, status):
+        if status not in {"open", "hidden"}:
+            raise ValueError("Unsupported discussion status")
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE discussion_messages SET status=? WHERE id=?",
+                (status, message_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def admin_discussion_message(self, message_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    d.*,
+                    u.tg_id AS author_tg_id,
+                    u.nickname AS author_nickname,
+                    s.title AS story_title
+                FROM discussion_messages d
+                JOIN users u ON u.id=d.author_id
+                JOIN stories s ON s.id=d.story_id
+                WHERE d.id=?
+                """,
+                (message_id,),
+            )
+            return await cur.fetchone()
+
     async def set_notifications(self, tg_id, enabled):
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -791,7 +1033,8 @@ class DB:
                     s.*,
                     u2.nickname,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
-                    (SELECT COUNT(*) FROM favorites f2 WHERE f2.story_id=s.id) AS favorites_count
+                    (SELECT COUNT(*) FROM favorites f2 WHERE f2.story_id=s.id) AS favorites_count,
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
                 FROM favorites f
                 JOIN users u ON u.id=f.user_id
                 JOIN stories s ON s.id=f.story_id
@@ -820,7 +1063,7 @@ class DB:
             return [row[0] for row in rows if row[0] not in exclude_tg_ids]
 
     async def report_target(self, reporter_tg_id, target_type, target_id, reason):
-        if target_type not in {"story", "comment"}:
+        if target_type not in {"story", "comment", "discussion"}:
             raise ValueError("Unsupported report target")
 
         async with aiosqlite.connect(self.path) as db:
@@ -830,7 +1073,11 @@ class DB:
                 return {"status": "user_not_found"}
             reporter_id = row[0]
 
-            table = "stories" if target_type == "story" else "comments"
+            table = {
+                "story": "stories",
+                "comment": "comments",
+                "discussion": "discussion_messages",
+            }[target_type]
             cur = await db.execute(
                 f"SELECT author_id FROM {table} WHERE id=?",
                 (target_id,),
@@ -1001,6 +1248,7 @@ class DB:
                 "reactions": "SELECT COUNT(*) FROM reactions",
                 "favorites": "SELECT COUNT(*) FROM favorites",
                 "reports": "SELECT COUNT(*) FROM reports WHERE status='open'",
+                "discussion_messages": "SELECT COUNT(*) FROM discussion_messages WHERE status='open'",
             }
             for key, sql in queries.items():
                 cur = await db.execute(sql)

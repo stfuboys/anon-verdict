@@ -53,3 +53,17 @@ The bot now includes:
 - richer leaderboard context with advice counts and helpful likes
 
 Moderation actions are restricted to the configured `OWNER_TG_ID`.
+
+
+## Discussions v5
+
+Each real case now has its own discussion area, separate from formal advice.
+
+- discussion messages do not grant reputation
+- the case owner appears as `👑 Автор` without exposing Telegram identity
+- participants can reply to a specific discussion message
+- discussion messages support lightweight likes
+- discussion messages can be reported and moderated from the CEO queue
+- direct replies can notify the recipient
+- followers of a saved case are notified when the case author posts in the discussion
+- discussion posting has its own cooldown to reduce spam

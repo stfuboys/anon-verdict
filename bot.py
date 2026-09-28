@@ -98,6 +98,10 @@ class Comment(StatesGroup):
     body = State()
 
 
+class Discussion(StatesGroup):
+    body = State()
+
+
 class Admin(StatesGroup):
     user_lookup = State()
 
@@ -270,7 +274,7 @@ def feed_card_text(story, index, total, cat_key="all", sort="new"):
         f"{badge}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{h(excerpt)}\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']} · ⭐ {story['favorites_count']}\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · 🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
 
@@ -406,7 +410,8 @@ def case_text(story):
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
         f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']} · ⭐ Сохранений: {story['favorites_count']}"
+        f"💬 Советов: {story['comments_count']} · 🗣 Обсуждение: {story['discussion_count']}\n"
+        f"⭐ Сохранений: {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -433,6 +438,12 @@ def case_keyboard(
         b.button(
             text=f"💬 Советы ({story['comments_count']})",
             callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+        )
+
+    if not story["is_demo"]:
+        b.button(
+            text=f"🗣 Обсуждение ({story['discussion_count']})",
+            callback_data=f"discuss:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
         )
 
     b.button(
@@ -592,6 +603,131 @@ async def render_comments(
             cat_key,
             sort,
         ),
+    )
+
+
+def discussion_text(item, index, total):
+    is_author = item["author_id"] == item["story_author_id"]
+    author_label = "👑 Автор" if is_author else h(item["nickname"])
+
+    staff = ""
+    if item["staff_role"] and item["staff_role"] != "SYSTEM":
+        staff = f" · 🛡️ {h(item['staff_role'])}"
+
+    reply_block = ""
+    if item["reply_to_id"] and item["reply_body"]:
+        reply_author = (
+            "👑 Автор"
+            if item["reply_author_id"] == item["story_author_id"]
+            else h(item["reply_nickname"] or "участнику")
+        )
+        quote = str(item["reply_body"]).strip().replace("\n", " ")
+        if len(quote) > 140:
+            quote = quote[:140].rstrip() + "…"
+        reply_block = (
+            f"\n↩️ <i>Ответ {reply_author}: {h(quote)}</i>\n"
+        )
+
+    return (
+        "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
+        f"<b>{author_label}</b>{staff}"
+        f"{reply_block}\n"
+        f"{h(item['body'])}\n\n"
+        f"👍 {item['likes']} · 📄 {index + 1} из {total}"
+    )
+
+
+def discussion_keyboard(item, sid, index, total, feed_index, cat_key="all", sort="new"):
+    cat_key, sort, _ = feed_options(cat_key, sort)
+    b = InlineKeyboardBuilder()
+
+    b.button(
+        text=f"👍 {item['likes']}",
+        callback_data=f"dlike:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="↩️ Ответить",
+        callback_data=f"dreply:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="🚩 Жалоба",
+        callback_data=f"report:discussion:{item['id']}:{sid}",
+    )
+
+    if total > 1:
+        prev_i = (index - 1) % total
+        next_i = (index + 1) % total
+        nav_row(
+            b,
+            f"discuss:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
+            f"{index + 1}/{total}",
+            f"discuss:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+        )
+
+    b.button(
+        text="✍️ Написать",
+        callback_data=f"dwrite:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+    )
+
+    if total > 1:
+        b.adjust(2, 1, 3, 1, 1)
+    else:
+        b.adjust(2, 1, 1, 1)
+    return b.as_markup()
+
+
+async def render_discussion(
+    message,
+    sid,
+    index=0,
+    feed_index=0,
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if not story or story["is_demo"]:
+        await safe_edit(
+            message,
+            "🗣 <b>ОБСУЖДЕНИЕ</b>\n\nДля этого дела обсуждение недоступно.",
+            home_inline(message.chat.id),
+        )
+        return
+
+    total = await db.discussion_count(sid)
+    if total == 0:
+        b = InlineKeyboardBuilder()
+        b.button(
+            text="✍️ Начать обсуждение",
+            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="⬅️ К делу",
+            callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        )
+        b.adjust(1)
+        await safe_edit(
+            message,
+            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
+            "Пока здесь тихо.\n"
+            "Можно задать вопрос автору, уточнить детали или обсудить ситуацию с другими.",
+            b.as_markup(),
+        )
+        return
+
+    index = clamp(index, 0, total - 1)
+    item = await db.discussion_item(sid, index)
+    if not item:
+        index = max(0, total - 1)
+        item = await db.discussion_item(sid, index)
+
+    await safe_edit(
+        message,
+        discussion_text(item, index, total),
+        discussion_keyboard(item, sid, index, total, feed_index, cat_key, sort),
     )
 
 
@@ -791,7 +927,11 @@ async def render_admin_reports(message, page=0):
 
     b = InlineKeyboardBuilder()
     for report in rows:
-        icon = "⚖️" if report["target_type"] == "story" else "💬"
+        icon = {
+            "story": "⚖️",
+            "comment": "💬",
+            "discussion": "🗣",
+        }.get(report["target_type"], "🚩")
         reason = str(report["reason"])[:22]
         b.button(
             text=f"🚩 #{report['id']} · {icon} {report['target_id']} · {reason}",
@@ -841,7 +981,7 @@ async def render_admin_report(message, report_id, page=0):
             )
         else:
             preview = f"⚖️ Дело №{target_id} не найдено."
-    else:
+    elif target_type == "comment":
         target = await db.admin_comment(target_id)
         if target:
             preview = (
@@ -854,6 +994,19 @@ async def render_admin_report(message, report_id, page=0):
             )
         else:
             preview = f"💬 Совет №{target_id} не найден."
+    else:
+        target = await db.admin_discussion_message(target_id)
+        if target:
+            preview = (
+                f"🗣 <b>Сообщение обсуждения №{target_id}</b>\n"
+                f"Статус: <b>{h(target['status'])}</b>\n"
+                f"Автор: {h(target['author_nickname'])} · "
+                f"<code>{target['author_tg_id']}</code>\n"
+                f"К делу: {h(target['story_title'])}\n\n"
+                f"{h(target['body'][:1200])}"
+            )
+        else:
+            preview = f"🗣 Сообщение №{target_id} не найдено."
 
     text = (
         f"🚩 <b>ЖАЛОБА №{report_id}</b>\n\n"
@@ -1210,6 +1363,276 @@ async def mycase_callback(c: CallbackQuery):
         return
     await render_case(c.message, sid, index, "my", count_view=False)
     await c.answer()
+
+
+@dp.callback_query(F.data.startswith("discuss:"))
+async def discussion_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное обсуждение", show_alert=True)
+        return
+
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    await render_discussion(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dwrite:"))
+async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное обсуждение", show_alert=True)
+        return
+
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    if not is_owner(c.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед следующим сообщением.",
+                show_alert=True,
+            )
+            return
+
+    story = await db.story(sid)
+    if not story or story["is_demo"] or story["status"] != "open":
+        await c.answer("Обсуждение этого дела недоступно.", show_alert=True)
+        return
+
+    await state.update_data(
+        discussion_sid=sid,
+        discussion_index=index,
+        discussion_feed_index=feed_index,
+        discussion_cat_key=cat_key,
+        discussion_sort=sort,
+        discussion_reply_to=None,
+    )
+    await state.set_state(Discussion.body)
+    await c.message.answer(
+        "🗣 Напиши сообщение в обсуждение.\n\n"
+        "Здесь можно задавать вопросы, уточнять детали и отвечать другим участникам."
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dreply:"))
+async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        message_id = int(parts[1])
+        sid = int(parts[2])
+        index = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    if not is_owner(c.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед следующим сообщением.",
+                show_alert=True,
+            )
+            return
+
+    parent = await db.discussion_message(message_id)
+    if not parent or int(parent["story_id"]) != sid or parent["status"] != "open":
+        await c.answer("Сообщение уже недоступно.", show_alert=True)
+        return
+
+    quote = str(parent["body"]).strip().replace("\n", " ")
+    if len(quote) > 180:
+        quote = quote[:180].rstrip() + "…"
+
+    await state.update_data(
+        discussion_sid=sid,
+        discussion_index=index,
+        discussion_feed_index=feed_index,
+        discussion_cat_key=cat_key,
+        discussion_sort=sort,
+        discussion_reply_to=message_id,
+    )
+    await state.set_state(Discussion.body)
+    await c.message.answer(
+        "↩️ <b>Ответ на сообщение:</b>\n"
+        f"<i>{h(quote)}</i>\n\n"
+        "Напиши ответ:",
+        parse_mode="HTML",
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dlike:"))
+async def discussion_like_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        message_id = int(parts[1])
+        sid = int(parts[2])
+        index = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректная реакция", show_alert=True)
+        return
+
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    result = await db.toggle_discussion_like(c.from_user.id, message_id)
+    if result["status"] == "self":
+        await c.answer("Своё сообщение оценивать нельзя.", show_alert=True)
+        return
+    if result["status"] != "updated":
+        await c.answer("Сообщение не найдено.", show_alert=True)
+        return
+
+    await render_discussion(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
+    await c.answer("👍 Отметка добавлена" if result["liked"] else "👍 Отметка снята")
+
+
+@dp.message(Discussion.body)
+async def discussion_message_submit(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    text, reasons = moderate(m.text or "")
+    text = text.strip()
+
+    if not text:
+        await m.answer("Напиши сообщение текстом.")
+        return
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы.")
+        return
+
+    if not is_owner(m.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(m.from_user.id)
+        if remaining:
+            await m.answer(
+                f"⏳ Слишком быстро. Подожди ещё {remaining} сек."
+            )
+            return
+
+    data = await state.get_data()
+    sid = data.get("discussion_sid")
+    if not sid:
+        await state.clear()
+        await m.answer("Обсуждение уже недоступно.")
+        return
+
+    reply_to = data.get("discussion_reply_to")
+    result = await db.add_discussion_message(
+        m.from_user.id,
+        sid,
+        text,
+        reply_to_id=reply_to,
+    )
+
+    if result.get("status") != "created":
+        await state.clear()
+        await m.answer("Не удалось опубликовать сообщение. Возможно, дело уже закрыто.")
+        return
+
+    await state.clear()
+
+    total = await db.discussion_count(sid)
+    latest_index = max(0, total - 1)
+
+    feed_index = data.get("discussion_feed_index", 0)
+    cat_key = data.get("discussion_cat_key", "all")
+    sort = data.get("discussion_sort", "new")
+
+    # A direct reply is important enough for an immediate notification.
+    reply_tg_id = result.get("reply_tg_id")
+    if (
+        reply_to
+        and result.get("reply_notifications")
+        and reply_tg_id
+        and int(reply_tg_id) != int(m.from_user.id)
+    ):
+        rb = InlineKeyboardBuilder()
+        rb.button(
+            text="🗣 Открыть обсуждение",
+            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+        )
+        await safe_notify(
+            reply_tg_id,
+            "↩️ <b>Тебе ответили в обсуждении</b>\n\n"
+            f"⚖️ {h(result.get('story_title'))}\n"
+            f"{'👑 Автор' if result.get('is_story_author') else h(result.get('author_nickname'))}: "
+            f"{h(text[:240])}",
+            rb.as_markup(),
+        )
+
+    # Followers are notified only when the case author speaks.
+    if result.get("is_story_author"):
+        followers = await db.favorite_subscribers(
+            sid,
+            exclude_tg_ids=[m.from_user.id, reply_tg_id],
+        )
+        if followers:
+            rb = InlineKeyboardBuilder()
+            rb.button(
+                text="🗣 Открыть обсуждение",
+                callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+            )
+            asyncio.create_task(
+                notify_many(
+                    followers,
+                    "👑 <b>Автор написал в обсуждении сохранённого дела</b>\n\n"
+                    f"⚖️ {h(result.get('story_title'))}\n"
+                    f"{h(text[:240])}",
+                    rb.as_markup(),
+                )
+            )
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="🗣 Открыть обсуждение",
+        callback_data=f"discuss:{sid}:{latest_index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
+    await m.answer(
+        "✅ Сообщение опубликовано в обсуждении.\n\n"
+        "Репутация за обычные сообщения обсуждения не начисляется.",
+        reply_markup=b.as_markup(),
+    )
 
 
 @dp.callback_query(F.data.startswith("comments:"))
@@ -1580,7 +2003,7 @@ async def favorite_toggle_callback(c: CallbackQuery):
         sort=sort,
     )
     await c.answer(
-        "⭐ Дело сохранено. Буду сообщать о новых советах."
+        "⭐ Дело сохранено. Буду сообщать о важных обновлениях."
         if enabled
         else "Дело удалено из избранного."
     )
@@ -1612,14 +2035,21 @@ async def report_menu_callback(c: CallbackQuery):
         return
 
     sid = None
-    if target_type == "comment":
+    if target_type in {"comment", "discussion"}:
         try:
             sid = int(parts[3])
         except (ValueError, IndexError):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
 
-    short_type = "s" if target_type == "story" else "c"
+    short_type = {
+        "story": "s",
+        "comment": "c",
+        "discussion": "d",
+    }.get(target_type)
+    if not short_type:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
     b = InlineKeyboardBuilder()
     for reason_key, label in REPORT_REASONS.items():
         suffix = f":{sid}" if sid is not None else ""
@@ -1633,10 +2063,15 @@ async def report_menu_callback(c: CallbackQuery):
             text="⬅️ К делу",
             callback_data=f"case:{target_id}:0:all:new",
         )
-    else:
+    elif target_type == "comment":
         b.button(
             text="⬅️ К советам",
             callback_data=f"comments:{sid}:0:0:all:new",
+        )
+    else:
+        b.button(
+            text="⬅️ К обсуждению",
+            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
         )
     b.adjust(1)
 
@@ -1657,7 +2092,14 @@ async def report_submit_callback(c: CallbackQuery):
         await c.answer("Некорректная жалоба", show_alert=True)
         return
 
-    target_type = "story" if parts[1] == "s" else "comment"
+    target_type = {
+        "s": "story",
+        "c": "comment",
+        "d": "discussion",
+    }.get(parts[1])
+    if not target_type:
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
     try:
         target_id = int(parts[2])
     except ValueError:
@@ -1670,7 +2112,7 @@ async def report_submit_callback(c: CallbackQuery):
         return
 
     sid = target_id if target_type == "story" else None
-    if target_type == "comment":
+    if target_type in {"comment", "discussion"}:
         try:
             sid = int(parts[4])
         except (ValueError, IndexError):
@@ -1715,7 +2157,11 @@ async def report_submit_callback(c: CallbackQuery):
         callback_data=(
             f"case:{sid}:0:all:new"
             if target_type == "story"
-            else f"comments:{sid}:0:0:all:new"
+            else (
+                f"comments:{sid}:0:0:all:new"
+                if target_type == "comment"
+                else f"discuss:{sid}:0:0:all:new"
+            )
         ),
     )
     await safe_edit(
@@ -1774,7 +2220,8 @@ async def help_callback(c: CallbackQuery):
         "🏛️ <b>Зал суда</b> — компактная лента: короткое превью, фильтры и сортировка.\n"
         "🎲 Случайное дело — быстрый переход к другой истории.\n"
         "🔥 Можно открыть популярные дела или найти те, где ещё нет советов.\n"
-        "💬 <b>Советы</b> — тоже листаются внутри одного сообщения.\n"
+        "💬 <b>Советы</b> — отдельные рекомендации, которые влияют на репутацию.\n"
+        "🗣 <b>Обсуждение</b> — вопросы, уточнения и ответы внутри каждого дела без фарма репутации.\n"
         "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
         "⭐ <b>Избранное</b> — сохраняй дела и получай уведомления о новых советах.\n"
         "🚩 На неподходящее дело или совет можно отправить жалобу.\n"
@@ -1853,7 +2300,8 @@ async def menu_help(m: Message):
         "📝 Подай дело → расскажи ситуацию анонимно.\n"
         "🏛️ Зал суда → короткие карточки, фильтры, сортировка и 🎲 случайное дело.\n"
         "🔥 Популярные / 🆘 без советов → быстрые режимы ленты.\n"
-        "💬 Советы → листай внутри карточки дела.\n"
+        "💬 Советы → отдельные рекомендации автору дела.\n"
+        "🗣 Обсуждение → вопросы, ответы и разговор вокруг конкретного дела.\n"
         "⚖️ Мои дела → следи за своими публикациями.\n"
         "⭐ Избранное → сохраняй интересные дела и следи за обновлениями.\n"
         "🚩 Жалоба → отправляй спорный контент в закрытую очередь модерации.\n"
@@ -1938,6 +2386,7 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
         f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
         f"💬 Советы: <b>{s['comments']}</b>\n"
+        f"🗣 Сообщения обсуждений: <b>{s['discussion_messages']}</b>\n"
         f"👍👎 Реакции: <b>{s['reactions']}</b>\n"
         f"⭐ Сохранений: <b>{s['favorites']}</b>\n"
         f"🚩 Открытых жалоб: <b>{s['reports']}</b>",
@@ -2005,8 +2454,10 @@ async def admin_report_action_callback(c: CallbackQuery):
 
     if report["target_type"] == "story":
         await db.set_story_status(report["target_id"], "hidden")
-    else:
+    elif report["target_type"] == "comment":
         await db.set_comment_status(report["target_id"], "hidden")
+    else:
+        await db.set_discussion_status(report["target_id"], "hidden")
 
     await db.resolve_report(report_id, "resolved")
     await render_admin_reports(c.message, page)
