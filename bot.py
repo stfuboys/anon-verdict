@@ -1738,6 +1738,124 @@ async def mycase_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("life:menu:"))
+async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[4] if len(parts) > 4 else "my"
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    await render_case_management(
+        c.message,
+        c.from_user.id,
+        sid,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:confirm:"))
+async def lifecycle_confirm_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        action = parts[2]
+        sid = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    back_to = parts[5] if len(parts) > 5 else "my"
+    cat_key = parts[6] if len(parts) > 6 else "all"
+    sort = parts[7] if len(parts) > 7 else "new"
+
+    await render_lifecycle_confirmation(
+        c.message,
+        c.from_user.id,
+        action,
+        sid,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:do:"))
+async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        action = parts[2]
+        sid = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    back_to = parts[5] if len(parts) > 5 else "my"
+    cat_key = parts[6] if len(parts) > 6 else "all"
+    sort = parts[7] if len(parts) > 7 else "new"
+
+    targets = {"c": "closed", "o": "open", "d": "deleted"}
+    target = targets.get(action)
+    if not target:
+        await c.answer("Некорректное действие", show_alert=True)
+        return
+
+    result = await db.change_own_story_status(c.from_user.id, sid, target)
+    status = result.get("status")
+
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией — изменить его статус нельзя.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status not in {"updated", "unchanged"}:
+        await c.answer("Не удалось изменить статус дела.", show_alert=True)
+        return
+
+    if target == "deleted":
+        b = InlineKeyboardBuilder()
+        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        await safe_edit(
+            c.message,
+            f"🗑 <b>ДЕЛО №{sid} УДАЛЕНО</b>\n\n"
+            "Оно исчезло из твоего списка и больше недоступно другим пользователям.",
+            b.as_markup(),
+        )
+        await c.answer("Дело удалено")
+        return
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("✅ Дело завершено" if target == "closed" else "🔓 Дело снова открыто")
+
+
 @dp.callback_query(F.data.startswith("cancelinput:"))
 async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
