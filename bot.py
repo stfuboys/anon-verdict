@@ -1918,14 +1918,26 @@ async def story_update_message(m: Message, state: FSMContext):
         await m.answer("Напиши обновление текстом."); return
     if reasons:
         await m.answer("Удали персональные данные или угрозы."); return
-    d=await state.get_data()
-    result=await db.add_story_update(m.from_user.id,d["sid"],body)
+    d = await state.get_data()
+    if not d.get("sid"):
+        pending = await db.pending_input(m.from_user.id)
+        if pending and pending.get("action") == "story_update":
+            d = pending.get("payload") or {}
+    sid = d.get("sid")
+    if not sid:
+        await state.clear()
+        await db.clear_pending_input(m.from_user.id)
+        await m.answer("Не удалось определить, какое дело обновлять. Открой «⚙️ Управление → 📝 Обновить ситуацию» ещё раз.")
+        return
+
+    result = await db.add_story_update(m.from_user.id, sid, body)
     await state.clear()
+    await db.clear_pending_input(m.from_user.id)
     if result.get("status")!="created":
         await m.answer("Не удалось добавить обновление. Дело недоступно."); return
 
-    story=await db.story(d["sid"])
-    followers=await db.favorite_subscribers(d["sid"],exclude_tg_ids=[m.from_user.id])
+    story=await db.story(sid)
+    followers=await db.favorite_subscribers(sid,exclude_tg_ids=[m.from_user.id])
     if followers:
         b=InlineKeyboardBuilder()
         b.button(text="📝 Читать обновление",callback_data=f"updates:{d['sid']}:0:feed:all:new")
@@ -2062,6 +2074,7 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("cancelinput:"))
 async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
+    await db.clear_pending_input(c.from_user.id)
     parts = c.data.split(":")
     target = parts[1] if len(parts) > 1 else "feed"
 
@@ -2611,7 +2624,7 @@ async def comment(m: Message, state: FSMContext):
             return
 
     d = await state.get_data()
-    result = await db.comment(m.from_user.id, d["sid"], text)
+    result = await db.comment(m.from_user.id, sid, text)
     await state.clear()
 
     if result.get("status") == "story_closed":
@@ -2639,7 +2652,7 @@ async def comment(m: Message, state: FSMContext):
         callback_data=f"case:{d['sid']}:0:all:new",
     )
 
-    advice_total = await db.comment_count(d["sid"])
+    advice_total = await db.comment_count(sid)
     latest_advice_index = max(0, advice_total - 1)
     open_answers = InlineKeyboardBuilder()
     open_answers.button(
@@ -2655,14 +2668,14 @@ async def comment(m: Message, state: FSMContext):
     ):
         await upsert_advice_notification(
             owner_tg_id,
-            d["sid"],
+            sid,
             result.get("story_title"),
             result.get("commenter_nickname"),
             advice_total,
         )
 
     followers = await db.favorite_subscribers(
-        d["sid"],
+        sid,
         exclude_tg_ids=[m.from_user.id, owner_tg_id],
     )
     if followers:
