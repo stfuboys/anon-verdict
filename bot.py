@@ -903,6 +903,14 @@ async def home(c: CallbackQuery):
 @dp.callback_query(F.data == "new")
 async def new(c: CallbackQuery, state: FSMContext):
     await ensure_callback_user(c)
+    if not is_owner(c.from_user.id):
+        remaining = await db.story_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед новым делом.",
+                show_alert=True,
+            )
+            return
     await state.set_state(Story.category)
     b = InlineKeyboardBuilder()
     for x in CATS:
@@ -956,6 +964,14 @@ async def body(m: Message, state: FSMContext):
     if reasons:
         await m.answer("Удали из текста персональные данные или угрозы.")
         return
+
+    if not is_owner(m.from_user.id):
+        remaining = await db.story_cooldown_remaining(m.from_user.id)
+        if remaining:
+            await m.answer(
+                f"⏳ Слишком быстро. Подожди ещё {remaining} сек. перед публикацией нового дела."
+            )
+            return
 
     d = await state.get_data()
     sid = await db.create_story(m.from_user.id, d["category"], d["title"], text)
@@ -1107,6 +1123,22 @@ async def react_callback(c: CallbackQuery):
     delta = result.get("reputation_delta", 0)
     if delta > 0:
         message = "👍 Автору +1 репутации"
+        if (
+            result.get("author_notifications")
+            and result.get("author_tg_id")
+            and int(result["author_tg_id"]) != int(c.from_user.id)
+        ):
+            rb = InlineKeyboardBuilder()
+            rb.button(
+                text="💬 Открыть советы",
+                callback_data=f"comments:{sid}:0:0:all:new",
+            )
+            await safe_notify(
+                result["author_tg_id"],
+                "👍 <b>Твой совет отметили полезным</b>\n\n"
+                "За эту оценку тебе начислено <b>+1 репутации</b>.",
+                rb.as_markup(),
+            )
     elif delta < 0:
         message = "Лайк снят: −1 репутации"
     else:
@@ -1127,6 +1159,15 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[3] if len(parts) > 3 else "all"
     sort = parts[4] if len(parts) > 4 else "new"
+
+    if not is_owner(c.from_user.id):
+        remaining = await db.comment_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед следующим советом.",
+                show_alert=True,
+            )
+            return
 
     story = await db.story(sid)
     if not story or story["is_demo"]:
@@ -1162,14 +1203,57 @@ async def comment(m: Message, state: FSMContext):
         await m.answer("Удали персональные данные или угрозы.")
         return
 
+    if not is_owner(m.from_user.id):
+        remaining = await db.comment_cooldown_remaining(m.from_user.id)
+        if remaining:
+            await m.answer(
+                f"⏳ Слишком быстро. Подожди ещё {remaining} сек. перед следующим советом."
+            )
+            return
+
     d = await state.get_data()
-    await db.comment(m.from_user.id, d["sid"], text)
+    result = await db.comment(m.from_user.id, d["sid"], text)
     await state.clear()
     u = await db.get_user(m.from_user.id)
 
     cat_key = d.get("cat_key", "all")
     sort = d.get("sort", "new")
     feed_index = d.get("feed_index", 0)
+
+    open_case = InlineKeyboardBuilder()
+    open_case.button(
+        text="📖 Открыть дело",
+        callback_data=f"case:{d['sid']}:0:all:new",
+    )
+
+    owner_tg_id = result.get("story_owner_tg_id")
+    if (
+        result.get("story_owner_notifications")
+        and owner_tg_id
+        and int(owner_tg_id) != int(m.from_user.id)
+    ):
+        await safe_notify(
+            owner_tg_id,
+            "💬 <b>Новый совет к твоему делу</b>\n\n"
+            f"⚖️ {h(result.get('story_title'))}\n"
+            f"🧠 {h(result.get('commenter_nickname'))} оставил новый совет.",
+            open_case.as_markup(),
+        )
+
+    followers = await db.favorite_subscribers(
+        d["sid"],
+        exclude_tg_ids=[m.from_user.id, owner_tg_id],
+    )
+    if followers:
+        asyncio.create_task(
+            notify_many(
+                followers,
+                "⭐ <b>Новое в сохранённом деле</b>\n\n"
+                f"⚖️ {h(result.get('story_title'))}\n"
+                "Появился новый совет.",
+                open_case.as_markup(),
+            )
+        )
 
     b = InlineKeyboardBuilder()
     b.button(
@@ -1401,6 +1485,13 @@ async def menu_help(m: Message):
 @dp.message(F.text == "📝 Подать дело")
 async def menu_new(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if not is_owner(m.from_user.id):
+        remaining = await db.story_cooldown_remaining(m.from_user.id)
+        if remaining:
+            await m.answer(
+                f"⏳ Подожди ещё {remaining} сек. перед новым делом."
+            )
+            return
     await state.set_state(Story.category)
     b = InlineKeyboardBuilder()
     for x in CATS:
