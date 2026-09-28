@@ -331,6 +331,33 @@ class DB:
             cur = await db.execute("SELECT * FROM users WHERE tg_id=?", (tg_id,))
             return await cur.fetchone()
 
+    async def profile_stats(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    u.id,
+                    (SELECT COUNT(*) FROM stories s
+                     WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM comments c
+                     WHERE c.author_id=u.id AND c.status='open') AS advice_count,
+                    (
+                        SELECT COUNT(*)
+                        FROM reactions r
+                        JOIN comments c2 ON c2.id=r.comment_id
+                        WHERE c2.author_id=u.id
+                          AND c2.status='open'
+                          AND r.value=1
+                          AND r.user_id != u.id
+                    ) AS helpful_likes
+                FROM users u
+                WHERE u.tg_id=?
+                """,
+                (tg_id,),
+            )
+            return await cur.fetchone()
+
     async def update_profile(self, tg_id, nickname, bio):
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
@@ -757,6 +784,36 @@ class DB:
                 (sid, max(0, offset)),
             )
             return await cur.fetchone()
+
+    async def discussion_page(self, sid, offset=0, limit=4):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    d.*,
+                    u.nickname,
+                    u.staff_role,
+                    u.tg_id AS author_tg_id,
+                    s.author_id AS story_author_id,
+                    parent.body AS reply_body,
+                    parent.author_id AS reply_author_id,
+                    parent_u.nickname AS reply_nickname,
+                    (SELECT COUNT(*) FROM discussion_reactions r
+                     WHERE r.message_id=d.id AND r.value=1) AS likes
+                FROM discussion_messages d
+                JOIN users u ON u.id=d.author_id
+                JOIN stories s ON s.id=d.story_id
+                LEFT JOIN discussion_messages parent
+                  ON parent.id=d.reply_to_id AND parent.status='open'
+                LEFT JOIN users parent_u ON parent_u.id=parent.author_id
+                WHERE d.story_id=? AND d.status='open'
+                ORDER BY d.created_at ASC, d.id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (sid, max(1, limit), max(0, offset)),
+            )
+            return await cur.fetchall()
 
     async def discussion_message(self, message_id):
         async with aiosqlite.connect(self.path) as db:
