@@ -476,6 +476,17 @@ class DB:
 
             cur = await db.execute(
                 """
+                SELECT COUNT(*)
+                FROM comments
+                WHERE story_id=? AND author_id=?
+                """,
+                (sid, uid),
+            )
+            previous_comments = (await cur.fetchone())[0]
+            reputation_reward = 2 if previous_comments == 0 else 0
+
+            cur = await db.execute(
+                """
                 INSERT INTO comments(story_id, author_id, body, created_at, status)
                 VALUES(?,?,?,?, 'open')
                 """,
@@ -483,11 +494,12 @@ class DB:
             )
             comment_id = cur.lastrowid
 
-            await db.execute(
-                "UPDATE users SET reputation=reputation+2 WHERE id=?",
-                (uid,),
-            )
-            await self._sync_progress(db, uid)
+            if reputation_reward:
+                await db.execute(
+                    "UPDATE users SET reputation=reputation+? WHERE id=?",
+                    (reputation_reward, uid),
+                )
+                await self._sync_progress(db, uid)
             await db.commit()
 
             owner_tg_id, owner_notifications, story_title = story_row
@@ -499,6 +511,7 @@ class DB:
                 "story_owner_tg_id": owner_tg_id,
                 "story_owner_notifications": bool(owner_notifications),
                 "story_title": story_title,
+                "reputation_reward": reputation_reward,
             }
 
     async def comment_count(self, sid):
