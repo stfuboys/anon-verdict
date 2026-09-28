@@ -328,6 +328,10 @@ def feed_options(cat_key="all", sort="new"):
 def feed_case_status(story):
     if story["is_demo"]:
         return "🧪 Пример"
+    if story["status"] == "open" and story["reopened_at"]:
+        return "🔓 Возобновлено"
+    if int(story["update_count"] or 0) > 0:
+        return "📝 Обновлено"
     if story["comments_count"] == 0:
         return "🆘 Нужны советы"
     if story["discussion_count"] > 0:
@@ -349,9 +353,23 @@ def story_status_label(status):
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
 
-    excerpt = str(story["body"]).strip()
-    if len(excerpt) > 280:
-        excerpt = excerpt[:280].rstrip() + "…"
+    update_count = int(story["update_count"] or 0)
+    latest_update = str(story["latest_update_body"] or "").strip()
+
+    if update_count and latest_update:
+        excerpt = latest_update
+        if len(excerpt) > 280:
+            excerpt = excerpt[:280].rstrip() + "…"
+        content = (
+            "📝 <b>Автор обновил ситуацию</b>\n"
+            f"{h(excerpt)}\n\n"
+            "<i>📜 Исходная история сохранена в деле</i>"
+        )
+    else:
+        excerpt = str(story["body"]).strip()
+        if len(excerpt) > 280:
+            excerpt = excerpt[:280].rstrip() + "…"
+        content = h(excerpt)
 
     filter_label = FEED_CATEGORIES[cat_key][0]
     sort_label = FEED_SORTS[sort]
@@ -363,7 +381,7 @@ def feed_card_text(story, index, total, cat_key="all", sort="new"):
         f"⚖️ <b>ДЕЛО №{story['id']}</b>\n"
         f"{h(story['category'])} · {h(status)}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"{h(excerpt)}\n\n"
+        f"{content}\n\n"
         "────────────\n"
         f"👁 {story['views']}   💬 {story['comments_count']}   "
         f"🗣 {story['discussion_count']}   ⭐ {story['favorites_count']}\n"
@@ -500,15 +518,43 @@ def case_text(story):
     if not story["is_demo"]:
         status_line = f"\n{story_status_label(story['status'])}"
 
-    body = h(story["body"][:3000])
-    if len(story["body"]) > 3000:
-        body += "…"
+    update_count = int(story["update_count"] or 0)
+    latest_update = str(story["latest_update_body"] or "").strip()
+    original_body = str(story["body"]).strip()
+
+    if update_count and latest_update:
+        update_body = latest_update[:1800]
+        if len(latest_update) > 1800:
+            update_body += "…"
+
+        original_preview = original_body[:1400]
+        if len(original_body) > 1400:
+            original_preview += "…"
+
+        lifecycle_badge = (
+            "🔓 <b>Дело возобновлено</b>\n"
+            if story["status"] == "open" and story["reopened_at"]
+            else "📝 <b>Ситуация обновлена автором</b>\n"
+        )
+        content = (
+            f"{lifecycle_badge}"
+            "📝 <b>ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ</b>\n"
+            f"{h(update_body)}\n\n"
+            "────────────\n"
+            "📜 <b>ИСХОДНАЯ СИТУАЦИЯ</b>\n"
+            f"{h(original_preview)}"
+        )
+    else:
+        body = original_body[:3000]
+        if len(original_body) > 3000:
+            body += "…"
+        content = h(body)
 
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
         f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"{body}\n\n"
+        f"{content}\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
