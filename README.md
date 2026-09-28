@@ -81,3 +81,15 @@ The Telegram interface is streamlined around a smaller number of primary actions
 - profile shows case/advice/helpful-like stats and progress toward the next rank
 - primary reply-keyboard navigation renders the destination directly without temporary “opening…” messages
 - back-button wording and empty states are standardized
+
+
+## Court card v7
+
+The court feed card is now more expressive and less repetitive.
+
+- feed cards show a simple status such as "needs advice", "discussion active", or "open"
+- the duplicate page counter was removed from the card body; navigation keeps the page position
+- metadata is visually separated from the story excerpt
+- pending advice/discussion input has an explicit cancel action
+- navigating away from a text-entry flow clears the stale FSM state, preventing later messages from being submitted to the wrong action
+- canceling returns to the relevant case or discussion context
