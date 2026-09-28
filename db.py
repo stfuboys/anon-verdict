@@ -371,7 +371,7 @@ class DB:
             await db.commit()
             return True
 
-    async def pending_input(self, tg_id):
+    async def pending_input(self, tg_id, max_age_seconds=1800):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -386,6 +386,24 @@ class DB:
             row = await cur.fetchone()
             if not row:
                 return None
+
+            try:
+                updated_at = datetime.fromisoformat(row["updated_at"])
+                age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+            except (TypeError, ValueError):
+                age = max_age_seconds + 1
+
+            if age > max_age_seconds:
+                await db.execute(
+                    """
+                    DELETE FROM pending_inputs
+                    WHERE user_id=(SELECT id FROM users WHERE tg_id=?)
+                    """,
+                    (tg_id,),
+                )
+                await db.commit()
+                return None
+
             try:
                 payload = json.loads(row["payload"] or "{}")
             except (TypeError, json.JSONDecodeError):
