@@ -831,24 +831,58 @@ async def body(m: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("feed:"))
 async def feed_callback(c: CallbackQuery):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        index = int(c.data.split(":")[1])
+        index = int(parts[1])
     except (ValueError, IndexError):
         index = 0
-    await render_feed(c.message, index)
+    cat_key = parts[2] if len(parts) > 2 else "all"
+    sort = parts[3] if len(parts) > 3 else "new"
+    await render_feed(c.message, index, cat_key, sort)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("feedcat:"))
+async def feed_category_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    cat_key = parts[1] if len(parts) > 1 else "all"
+    sort = parts[2] if len(parts) > 2 else "new"
+    await render_feed_categories(c.message, cat_key, sort)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("feedsort:"))
+async def feed_sort_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    cat_key = parts[1] if len(parts) > 1 else "all"
+    sort = parts[2] if len(parts) > 2 else "new"
+    await render_feed_sorts(c.message, cat_key, sort)
     await c.answer()
 
 
 @dp.callback_query(F.data.startswith("case:"))
 async def case_callback(c: CallbackQuery):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        _, sid, index = c.data.split(":")
-        sid, index = int(sid), int(index)
+        sid = int(parts[1])
+        index = int(parts[2])
     except (ValueError, IndexError):
         await c.answer("Некорректное дело", show_alert=True)
         return
-    await render_case(c.message, sid, index, "feed", count_view=True)
+    cat_key = parts[3] if len(parts) > 3 else "all"
+    sort = parts[4] if len(parts) > 4 else "new"
+    await render_case(
+        c.message,
+        sid,
+        index,
+        "feed",
+        count_view=True,
+        cat_key=cat_key,
+        sort=sort,
+    )
     await c.answer()
 
 
@@ -868,48 +902,102 @@ async def mycase_callback(c: CallbackQuery):
 @dp.callback_query(F.data.startswith("comments:"))
 async def comments_callback(c: CallbackQuery):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        _, sid, index, feed_index = c.data.split(":")
-        sid, index, feed_index = int(sid), int(index), int(feed_index)
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
     except (ValueError, IndexError):
         await c.answer("Некорректная страница", show_alert=True)
         return
-    await render_comments(c.message, sid, index, feed_index)
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+    await render_comments(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
     await c.answer()
 
 
 @dp.callback_query(F.data.startswith("react:"))
 async def react_callback(c: CallbackQuery):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        _, value, cid, sid, index, feed_index = c.data.split(":")
-        value, cid, sid, index, feed_index = (
-            int(value), int(cid), int(sid), int(index), int(feed_index)
-        )
+        value = int(parts[1])
+        cid = int(parts[2])
+        sid = int(parts[3])
+        index = int(parts[4])
+        feed_index = int(parts[5])
     except (ValueError, IndexError):
         await c.answer("Некорректная реакция", show_alert=True)
         return
-    await db.react(c.from_user.id, cid, value)
-    await render_comments(c.message, sid, index, feed_index)
-    await c.answer("Оценка сохранена")
+
+    cat_key = parts[6] if len(parts) > 6 else "all"
+    sort = parts[7] if len(parts) > 7 else "new"
+
+    result = await db.react(c.from_user.id, cid, value)
+    if result["status"] == "self":
+        await c.answer("Свой совет оценивать нельзя.", show_alert=True)
+        return
+    if result["status"] == "not_found":
+        await c.answer("Совет не найден.", show_alert=True)
+        return
+    if result["status"] == "unchanged":
+        await c.answer("Эта оценка уже стоит.")
+        return
+
+    await render_comments(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
+
+    delta = result.get("reputation_delta", 0)
+    if delta > 0:
+        message = "👍 Автору +1 репутации"
+    elif delta < 0:
+        message = "Лайк снят: −1 репутации"
+    else:
+        message = "Оценка сохранена"
+    await c.answer(message)
 
 
 @dp.callback_query(F.data.startswith("advice:"))
 async def advice_start(c: CallbackQuery, state: FSMContext):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        _, sid, feed_index = c.data.split(":")
-        sid, feed_index = int(sid), int(feed_index)
+        sid = int(parts[1])
+        feed_index = int(parts[2])
     except (ValueError, IndexError):
         await c.answer("Некорректное дело", show_alert=True)
         return
 
+    cat_key = parts[3] if len(parts) > 3 else "all"
+    sort = parts[4] if len(parts) > 4 else "new"
+
     story = await db.story(sid)
     if not story or story["is_demo"]:
-        await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
+        await c.answer(
+            "К демонстрационным делам советы не добавляются.",
+            show_alert=True,
+        )
         return
 
-    await state.update_data(sid=sid, feed_index=feed_index)
+    await state.update_data(
+        sid=sid,
+        feed_index=feed_index,
+        cat_key=cat_key,
+        sort=sort,
+    )
     await state.set_state(Comment.body)
     await c.message.answer(
         "💬 Напиши совет или мнение.\n\n"
@@ -935,10 +1023,18 @@ async def comment(m: Message, state: FSMContext):
     await state.clear()
     u = await db.get_user(m.from_user.id)
 
+    cat_key = d.get("cat_key", "all")
+    sort = d.get("sort", "new")
+    feed_index = d.get("feed_index", 0)
+
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ К делу", callback_data=f"case:{d['sid']}:{d.get('feed_index', 0)}")
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{d['sid']}:{feed_index}:{cat_key}:{sort}",
+    )
     await m.answer(
         "✅ Совет опубликован. <b>+2 репутации.</b>\n\n"
+        "Если другие участники поставят 👍, репутация автора совета тоже вырастет.\n\n"
         f"🎖️ {h(u['title'])} · ⭐ {u['reputation']}",
         parse_mode="HTML",
         reply_markup=b.as_markup(),
@@ -948,12 +1044,16 @@ async def comment(m: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("ai:"))
 async def ai_callback(c: CallbackQuery):
     await ensure_callback_user(c)
+    parts = c.data.split(":")
     try:
-        _, sid, feed_index = c.data.split(":")
-        sid, feed_index = int(sid), int(feed_index)
+        sid = int(parts[1])
+        feed_index = int(parts[2])
     except (ValueError, IndexError):
         await c.answer("Некорректное дело", show_alert=True)
         return
+
+    cat_key = parts[3] if len(parts) > 3 else "all"
+    sort = parts[4] if len(parts) > 4 else "new"
 
     story = await db.story(sid)
     if not story:
@@ -962,7 +1062,10 @@ async def ai_callback(c: CallbackQuery):
 
     result = await review(story["title"], story["body"])
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ К делу", callback_data=f"case:{sid}:{feed_index}")
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+    )
     await safe_edit(
         c.message,
         "🧠 <b>РАЗБОР СОВЕТНИКА</b>\n\n" + h(result),
