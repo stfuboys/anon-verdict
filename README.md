@@ -93,3 +93,16 @@ The court feed card is now more expressive and less repetitive.
 - pending advice/discussion input has an explicit cancel action
 - navigating away from a text-entry flow clears the stale FSM state, preventing later messages from being submitted to the wrong action
 - canceling returns to the relevant case or discussion context
+
+
+## Case lifecycle v9
+
+Case authors can manage the lifecycle of their own real cases.
+
+- open cases accept new advice and discussion messages
+- completed cases leave the active Court feed but remain readable from My Cases and Favorites
+- completed cases can be reopened by their author
+- deleted cases are soft-deleted: they disappear from user-facing lists while historical advice, reactions, moderation data, and reputation remain intact
+- destructive deletion requires confirmation
+- owner controls are exposed through a dedicated case management screen
+- moderation hiding preserves the case's previous open/completed state for safe restoration
