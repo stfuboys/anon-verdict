@@ -101,6 +101,8 @@ class DB:
                   ON comments(story_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_users_reputation
                   ON users(reputation DESC, created_at);
+                CREATE INDEX IF NOT EXISTS idx_reactions_comment
+                  ON reactions(comment_id, value);
                 """
             )
 
@@ -291,32 +293,63 @@ class DB:
             )
             return await cur.fetchone()
 
-    async def feed_count(self):
+    def _feed_filter(self, category=None, sort="new"):
+        clauses = ["s.status='open'"]
+        params = []
+
+        if category:
+            clauses.append("s.category=?")
+            params.append(category)
+
+        if sort == "unanswered":
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM comments c0 WHERE c0.story_id=s.id)"
+            )
+
+        where_sql = " AND ".join(clauses)
+
+        if sort == "popular":
+            order_sql = """
+                s.is_demo ASC,
+                comments_count DESC,
+                s.views DESC,
+                s.created_at DESC
+            """
+        else:
+            order_sql = """
+                s.is_demo ASC,
+                CASE WHEN s.is_demo=0 THEN s.created_at END DESC,
+                CASE WHEN s.is_demo=1 THEN s.id END ASC
+            """
+
+        return where_sql, order_sql, params
+
+    async def feed_count(self, category=None, sort="new"):
+        where_sql, _, params = self._feed_filter(category, sort)
         async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
-                "SELECT COUNT(*) FROM stories WHERE status='open'"
+                f"SELECT COUNT(*) FROM stories s WHERE {where_sql}",
+                params,
             )
             return (await cur.fetchone())[0]
 
-    async def feed_item(self, offset=0):
+    async def feed_item(self, offset=0, category=None, sort="new"):
+        where_sql, order_sql, params = self._feed_filter(category, sort)
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                """
+                f"""
                 SELECT
                     s.*,
                     u.nickname,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
-                WHERE s.status='open'
-                ORDER BY
-                    s.is_demo ASC,
-                    CASE WHEN s.is_demo=0 THEN s.created_at END DESC,
-                    CASE WHEN s.is_demo=1 THEN s.id END ASC
+                WHERE {where_sql}
+                ORDER BY {order_sql}
                 LIMIT 1 OFFSET ?
                 """,
-                (max(0, offset),),
+                (*params, max(0, offset)),
             )
             return await cur.fetchone()
 
@@ -412,6 +445,28 @@ class DB:
                 raise RuntimeError("User must be initialized before reacting")
             uid = row[0]
 
+            cur = await db.execute(
+                "SELECT author_id FROM comments WHERE id=?",
+                (cid,),
+            )
+            comment_row = await cur.fetchone()
+            if not comment_row:
+                return {"status": "not_found", "reputation_delta": 0}
+
+            author_id = comment_row[0]
+            if author_id == uid:
+                return {"status": "self", "reputation_delta": 0}
+
+            cur = await db.execute(
+                "SELECT value FROM reactions WHERE user_id=? AND comment_id=?",
+                (uid, cid),
+            )
+            old_row = await cur.fetchone()
+            old_value = old_row[0] if old_row else None
+
+            if old_value == value:
+                return {"status": "unchanged", "reputation_delta": 0}
+
             await db.execute(
                 """
                 INSERT INTO reactions(user_id, comment_id, value)
@@ -421,7 +476,32 @@ class DB:
                 """,
                 (uid, cid, value),
             )
+
+            # Only likes affect reputation. A like is +1; changing a like
+            # to a dislike removes that +1. Dislikes themselves do not
+            # push reputation below zero or punish controversial advice.
+            reputation_delta = 0
+            if old_value != 1 and value == 1:
+                reputation_delta = 1
+            elif old_value == 1 and value == -1:
+                reputation_delta = -1
+
+            if reputation_delta:
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET reputation=MAX(0, reputation+?)
+                    WHERE id=?
+                    """,
+                    (reputation_delta, author_id),
+                )
+                await self._sync_progress(db, author_id)
+
             await db.commit()
+            return {
+                "status": "updated",
+                "reputation_delta": reputation_delta,
+            }
 
     async def leaderboard_count(self):
         async with aiosqlite.connect(self.path) as db:
