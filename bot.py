@@ -1912,45 +1912,78 @@ async def lifecycle_update_callback(c: CallbackQuery, state: FSMContext):
 async def story_update_message(m: Message, state: FSMContext):
     await ensure_message_user(m)
     if (m.text or "") in PRIMARY_NAV_TEXTS:
-        await state.clear(); await route_primary_navigation(m); return
-    body,reasons=moderate(m.text or ""); body=body.strip()
+        await state.clear()
+        await route_primary_navigation(m)
+        return
+
+    body, reasons = moderate(m.text or "")
+    body = body.strip()
     if not body:
-        await m.answer("Напиши обновление текстом."); return
+        await m.answer("Напиши обновление текстом.")
+        return
     if reasons:
-        await m.answer("Удали персональные данные или угрозы."); return
-    d = await state.get_data()
-    if not d.get("sid"):
+        await m.answer("Удали персональные данные или угрозы.")
+        return
+
+    data = await state.get_data()
+    if not data.get("sid"):
         pending = await db.pending_input(m.from_user.id)
         if pending and pending.get("action") == "story_update":
-            d = pending.get("payload") or {}
-    sid = d.get("sid")
+            data = pending.get("payload") or {}
+
+    sid = data.get("sid")
     if not sid:
         await state.clear()
         await db.clear_pending_input(m.from_user.id)
-        await m.answer("Не удалось определить, какое дело обновлять. Открой «⚙️ Управление → 📝 Обновить ситуацию» ещё раз.")
+        await m.answer(
+            "Не удалось определить, какое дело обновлять. "
+            "Открой «⚙️ Управление → 📝 Обновить ситуацию» ещё раз."
+        )
         return
 
     result = await db.add_story_update(m.from_user.id, sid, body)
     await state.clear()
     await db.clear_pending_input(m.from_user.id)
-    if result.get("status")!="created":
-        await m.answer("Не удалось добавить обновление. Дело недоступно."); return
 
-    story=await db.story(sid)
-    followers=await db.favorite_subscribers(sid,exclude_tg_ids=[m.from_user.id])
+    if result.get("status") != "created":
+        await m.answer("Не удалось добавить обновление. Дело недоступно.")
+        return
+
+    story = await db.story(sid)
+    followers = await db.favorite_subscribers(
+        sid,
+        exclude_tg_ids=[m.from_user.id],
+    )
     if followers:
-        b=InlineKeyboardBuilder()
-        b.button(text="📝 Читать обновление",callback_data=f"updates:{d['sid']}:0:feed:all:new")
-        asyncio.create_task(notify_many(
-            followers,
-            "📝 <b>Автор обновил сохранённое дело</b>\n\n"
-            f"⚖️ {h(story['title'])}\n"
-            f"{h(body[:500])}{'…' if len(body)>500 else ''}",
-            b.as_markup(),
-        ))
-    b=InlineKeyboardBuilder()
-    b.button(text="📖 К делу",callback_data=f"caseback:{d['sid']}:{d.get('feed_index',0)}:{d.get('back_to','my')}:{d.get('cat_key','all')}:{d.get('sort','new')}")
-    await m.answer("✅ <b>Обновление добавлено.</b>\n\nСтарый текст дела сохранён.",parse_mode="HTML",reply_markup=b.as_markup())
+        b = InlineKeyboardBuilder()
+        b.button(
+            text="📝 Читать обновление",
+            callback_data=f"updates:{sid}:0:feed:all:new",
+        )
+        asyncio.create_task(
+            notify_many(
+                followers,
+                "📝 <b>Автор обновил сохранённое дело</b>\n\n"
+                f"⚖️ {h(story['title'])}\n"
+                f"{h(body[:500])}{'…' if len(body) > 500 else ''}",
+                b.as_markup(),
+            )
+        )
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="📖 К делу",
+        callback_data=(
+            f"caseback:{sid}:{data.get('feed_index', 0)}:"
+            f"{data.get('back_to', 'my')}:{data.get('cat_key', 'all')}:"
+            f"{data.get('sort', 'new')}"
+        ),
+    )
+    await m.answer(
+        "✅ <b>Обновление добавлено.</b>\n\nСтарый текст дела сохранён.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
 
 
 @dp.callback_query(F.data.startswith("life:menu:"))
@@ -2334,9 +2367,9 @@ async def discussion_message_submit(m: Message, state: FSMContext):
         await state.clear()
         await route_primary_navigation(m)
         return
+
     text, reasons = moderate(m.text or "")
     text = text.strip()
-
     if not text:
         await m.answer("Напиши сообщение текстом.")
         return
@@ -2351,10 +2384,16 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             return
 
     data = await state.get_data()
+    if not data.get("discussion_sid"):
+        pending = await db.pending_input(m.from_user.id)
+        if pending and pending.get("action") == "discussion":
+            data = pending.get("payload") or {}
+
     sid = data.get("discussion_sid")
     if not sid:
         await state.clear()
-        await m.answer("Обсуждение уже недоступно.")
+        await db.clear_pending_input(m.from_user.id)
+        await m.answer("Не удалось определить обсуждение. Открой его и нажми «✍️ Написать» ещё раз.")
         return
 
     reply_to = data.get("discussion_reply_to")
@@ -2367,10 +2406,12 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     if result.get("status") != "created":
         await state.clear()
+        await db.clear_pending_input(m.from_user.id)
         await m.answer("Не удалось опубликовать сообщение. Возможно, дело уже закрыто.")
         return
 
     await state.clear()
+    await db.clear_pending_input(m.from_user.id)
 
     feed_index = data.get("discussion_feed_index", 0)
     cat_key = data.get("discussion_cat_key", "all")
@@ -2606,6 +2647,7 @@ async def comment(m: Message, state: FSMContext):
         await state.clear()
         await route_primary_navigation(m)
         return
+
     text, reasons = moderate(m.text or "")
     text = text.strip()
     if not text:
@@ -2623,13 +2665,26 @@ async def comment(m: Message, state: FSMContext):
             )
             return
 
-    d = await state.get_data()
+    data = await state.get_data()
+    if not data.get("sid"):
+        pending = await db.pending_input(m.from_user.id)
+        if pending and pending.get("action") == "comment":
+            data = pending.get("payload") or {}
+
+    sid = data.get("sid")
+    if not sid:
+        await state.clear()
+        await db.clear_pending_input(m.from_user.id)
+        await m.answer("Не удалось определить дело для совета. Открой дело и нажми «💬 Дать совет» ещё раз.")
+        return
+
     result = await db.comment(m.from_user.id, sid, text)
     await state.clear()
+    await db.clear_pending_input(m.from_user.id)
 
     if result.get("status") == "story_closed":
         b = InlineKeyboardBuilder()
-        b.button(text="📖 К делу", callback_data=f"caseback:{d['sid']}:0:feed:all:new")
+        b.button(text="📖 К делу", callback_data=f"caseback:{sid}:0:feed:all:new")
         await m.answer(
             "✅ Дело уже завершено автором. Этот совет не был опубликован.",
             reply_markup=b.as_markup(),
@@ -2640,26 +2695,18 @@ async def comment(m: Message, state: FSMContext):
         return
 
     u = await db.get_user(m.from_user.id)
-
-    cat_key = d.get("cat_key", "all")
-    sort = d.get("sort", "new")
-    feed_index = d.get("feed_index", 0)
-    back_to = d.get("back_to", "feed")
+    cat_key = data.get("cat_key", "all")
+    sort = data.get("sort", "new")
+    feed_index = data.get("feed_index", 0)
+    back_to = data.get("back_to", "feed")
 
     open_case = InlineKeyboardBuilder()
     open_case.button(
         text="📖 Открыть дело",
-        callback_data=f"case:{d['sid']}:0:all:new",
+        callback_data=f"case:{sid}:0:all:new",
     )
 
     advice_total = await db.comment_count(sid)
-    latest_advice_index = max(0, advice_total - 1)
-    open_answers = InlineKeyboardBuilder()
-    open_answers.button(
-        text=f"💬 Читать ответы · {advice_total}",
-        callback_data=f"comments:{d['sid']}:{latest_advice_index}:0:all:new:my",
-    )
-
     owner_tg_id = result.get("story_owner_tg_id")
     if (
         result.get("story_owner_notifications")
@@ -2692,11 +2739,11 @@ async def comment(m: Message, state: FSMContext):
     b = InlineKeyboardBuilder()
     b.button(
         text="💬 Открыть советы",
-        callback_data=f"comments:{d['sid']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
+        callback_data=f"comments:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"caseback:{d['sid']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
     b.adjust(1)
 
@@ -3603,6 +3650,50 @@ async def admin_status_callback(c: CallbackQuery):
 
     await render_admin_story(c.message, sid, page)
     await c.answer("Статус обновлён")
+
+
+@dp.message(F.text)
+async def pending_text_fallback(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
+
+    pending = await db.pending_input(m.from_user.id)
+    if not pending:
+        await m.answer(
+            "Не понял, куда отправить этот текст. "
+            "Сначала выбери действие: «Дать совет», «Написать» в обсуждении "
+            "или «Обновить ситуацию»."
+        )
+        return
+
+    action = pending.get("action")
+    payload = pending.get("payload") or {}
+
+    if action == "story_update":
+        await state.set_state(StoryUpdate.body)
+        await state.update_data(**payload)
+        await story_update_message(m, state)
+        return
+
+    if action == "comment":
+        await state.set_state(Comment.body)
+        await state.update_data(**payload)
+        await comment(m, state)
+        return
+
+    if action == "discussion":
+        await state.set_state(Discussion.body)
+        await state.update_data(**payload)
+        await discussion_message_submit(m, state)
+        return
+
+    await db.clear_pending_input(m.from_user.id)
+    await state.clear()
+    await m.answer("Старый режим ввода сброшен. Выбери действие ещё раз.")
 
 
 async def main():
