@@ -2800,6 +2800,12 @@ async def report_menu_callback(c: CallbackQuery, state: FSMContext):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
 
+    check_sid = target_id if target_type == "story" else sid
+    story = await db.story(check_sid) if check_sid is not None else None
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Этот материал больше недоступен.", show_alert=True)
+        return
+
     short_type = {
         "story": "s",
         "comment": "c",
@@ -2877,6 +2883,11 @@ async def report_submit_callback(c: CallbackQuery, state: FSMContext):
         except (ValueError, IndexError):
             await c.answer("Некорректная жалоба", show_alert=True)
             return
+
+    story = await db.story(sid) if sid is not None else None
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Этот материал больше недоступен.", show_alert=True)
+        return
 
     result = await db.report_target(
         c.from_user.id,
