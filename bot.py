@@ -2098,6 +2098,11 @@ async def discussion_like_callback(c: CallbackQuery, state: FSMContext):
     sort = parts[6] if len(parts) > 6 else "new"
     back_to = parts[7] if len(parts) > 7 else "feed"
 
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Это дело больше недоступно.", show_alert=True)
+        return
+
     result = await db.toggle_discussion_like(c.from_user.id, message_id)
     if result["status"] == "self":
         await c.answer("Своё сообщение оценивать нельзя.", show_alert=True)
@@ -2275,6 +2280,11 @@ async def react_callback(c: CallbackQuery, state: FSMContext):
     cat_key = parts[6] if len(parts) > 6 else "all"
     sort = parts[7] if len(parts) > 7 else "new"
     back_to = parts[8] if len(parts) > 8 else "feed"
+
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Это дело больше недоступно.", show_alert=True)
+        return
 
     result = await db.react(c.from_user.id, cid, value)
     if result["status"] == "self":
