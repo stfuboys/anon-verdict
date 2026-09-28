@@ -125,3 +125,13 @@ Case authors can manage the lifecycle of their own real cases.
 - reopened cases are explicitly marked and rise in the New feed
 - update history is shown only when multiple updates exist
 - saved-case update notifications open the normal case card, where the latest update is immediately visible
+
+
+## Best answer and case quality v13
+
+- new case descriptions require at least 30 characters
+- completing a case with replies opens a paged best-answer picker
+- authors can choose a best answer or explicitly close without one
+- selected advice is marked as the author's best answer in normal advice browsing
+- best-answer selection is validated against the same case before closing
+- stale direct-close buttons cannot bypass the best-answer picker when replies exist
