@@ -1344,6 +1344,274 @@ async def mycase_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("discuss:"))
+async def discussion_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное обсуждение", show_alert=True)
+        return
+
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    await render_discussion(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dwrite:"))
+async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное обсуждение", show_alert=True)
+        return
+
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    if not is_owner(c.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед следующим сообщением.",
+                show_alert=True,
+            )
+            return
+
+    story = await db.story(sid)
+    if not story or story["is_demo"] or story["status"] != "open":
+        await c.answer("Обсуждение этого дела недоступно.", show_alert=True)
+        return
+
+    await state.update_data(
+        discussion_sid=sid,
+        discussion_index=index,
+        discussion_feed_index=feed_index,
+        discussion_cat_key=cat_key,
+        discussion_sort=sort,
+        discussion_reply_to=None,
+    )
+    await state.set_state(Discussion.body)
+    await c.message.answer(
+        "🗣 Напиши сообщение в обсуждение.\n\n"
+        "Здесь можно задавать вопросы, уточнять детали и отвечать другим участникам."
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dreply:"))
+async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        message_id = int(parts[1])
+        sid = int(parts[2])
+        index = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    if not is_owner(c.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(c.from_user.id)
+        if remaining:
+            await c.answer(
+                f"Подожди ещё {remaining} сек. перед следующим сообщением.",
+                show_alert=True,
+            )
+            return
+
+    parent = await db.discussion_message(message_id)
+    if not parent or int(parent["story_id"]) != sid or parent["status"] != "open":
+        await c.answer("Сообщение уже недоступно.", show_alert=True)
+        return
+
+    quote = str(parent["body"]).strip().replace("\n", " ")
+    if len(quote) > 180:
+        quote = quote[:180].rstrip() + "…"
+
+    await state.update_data(
+        discussion_sid=sid,
+        discussion_index=index,
+        discussion_feed_index=feed_index,
+        discussion_cat_key=cat_key,
+        discussion_sort=sort,
+        discussion_reply_to=message_id,
+    )
+    await state.set_state(Discussion.body)
+    await c.message.answer(
+        "↩️ <b>Ответ на сообщение:</b>\n"
+        f"<i>{h(quote)}</i>\n\n"
+        "Напиши ответ:",
+        parse_mode="HTML",
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("dlike:"))
+async def discussion_like_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        message_id = int(parts[1])
+        sid = int(parts[2])
+        index = int(parts[3])
+        feed_index = int(parts[4])
+    except (ValueError, IndexError):
+        await c.answer("Некорректная реакция", show_alert=True)
+        return
+
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    result = await db.toggle_discussion_like(c.from_user.id, message_id)
+    if result["status"] == "self":
+        await c.answer("Своё сообщение оценивать нельзя.", show_alert=True)
+        return
+    if result["status"] != "updated":
+        await c.answer("Сообщение не найдено.", show_alert=True)
+        return
+
+    await render_discussion(
+        c.message,
+        sid,
+        index,
+        feed_index,
+        cat_key,
+        sort,
+    )
+    await c.answer("👍 Отметка добавлена" if result["liked"] else "👍 Отметка снята")
+
+
+@dp.message(Discussion.body)
+async def discussion_message_submit(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    text, reasons = moderate(m.text or "")
+    text = text.strip()
+
+    if not text:
+        await m.answer("Напиши сообщение текстом.")
+        return
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы.")
+        return
+
+    if not is_owner(m.from_user.id):
+        remaining = await db.discussion_cooldown_remaining(m.from_user.id)
+        if remaining:
+            await m.answer(
+                f"⏳ Слишком быстро. Подожди ещё {remaining} сек."
+            )
+            return
+
+    data = await state.get_data()
+    sid = data.get("discussion_sid")
+    if not sid:
+        await state.clear()
+        await m.answer("Обсуждение уже недоступно.")
+        return
+
+    reply_to = data.get("discussion_reply_to")
+    result = await db.add_discussion_message(
+        m.from_user.id,
+        sid,
+        text,
+        reply_to_id=reply_to,
+    )
+
+    if result.get("status") != "created":
+        await state.clear()
+        await m.answer("Не удалось опубликовать сообщение. Возможно, дело уже закрыто.")
+        return
+
+    await state.clear()
+
+    feed_index = data.get("discussion_feed_index", 0)
+    cat_key = data.get("discussion_cat_key", "all")
+    sort = data.get("discussion_sort", "new")
+
+    # A direct reply is important enough for an immediate notification.
+    reply_tg_id = result.get("reply_tg_id")
+    if (
+        reply_to
+        and result.get("reply_notifications")
+        and reply_tg_id
+        and int(reply_tg_id) != int(m.from_user.id)
+    ):
+        rb = InlineKeyboardBuilder()
+        rb.button(
+            text="🗣 Открыть обсуждение",
+            callback_data=f"discuss:{sid}:0:0:all:new",
+        )
+        await safe_notify(
+            reply_tg_id,
+            "↩️ <b>Тебе ответили в обсуждении</b>\n\n"
+            f"⚖️ {h(result.get('story_title'))}\n"
+            f"{'👑 Автор' if result.get('is_story_author') else h(result.get('author_nickname'))}: "
+            f"{h(text[:240])}",
+            rb.as_markup(),
+        )
+
+    # Followers are notified only when the case author speaks.
+    if result.get("is_story_author"):
+        followers = await db.favorite_subscribers(
+            sid,
+            exclude_tg_ids=[m.from_user.id, reply_tg_id],
+        )
+        if followers:
+            rb = InlineKeyboardBuilder()
+            rb.button(
+                text="🗣 Открыть обсуждение",
+                callback_data=f"discuss:{sid}:0:0:all:new",
+            )
+            asyncio.create_task(
+                notify_many(
+                    followers,
+                    "👑 <b>Автор написал в обсуждении сохранённого дела</b>\n\n"
+                    f"⚖️ {h(result.get('story_title'))}\n"
+                    f"{h(text[:240])}",
+                    rb.as_markup(),
+                )
+            )
+
+    total = await db.discussion_count(sid)
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="🗣 Открыть обсуждение",
+        callback_data=f"discuss:{sid}:{max(0, total - 1)}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
+    await m.answer(
+        "✅ Сообщение опубликовано в обсуждении.\n\n"
+        "Репутация за обычные сообщения обсуждения не начисляется.",
+        reply_markup=b.as_markup(),
+    )
+
+
 @dp.callback_query(F.data.startswith("comments:"))
 async def comments_callback(c: CallbackQuery):
     await ensure_callback_user(c)
