@@ -101,14 +101,18 @@ def h(value):
     return html.escape(str(value or ""), quote=False)
 
 
-def main_keyboard():
+def main_keyboard(user_id=None):
+    rows = [
+        [KeyboardButton(text="📝 Подать дело"), KeyboardButton(text="🏛️ Зал суда")],
+        [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏆 Рейтинг")],
+        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="🎖️ Звания")],
+        [KeyboardButton(text="ℹ️ Как это работает")],
+    ]
+    if owner_id is not None and user_id == owner_id:
+        rows.append([KeyboardButton(text="🛡️ CEO Панель")])
+
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📝 Подать дело"), KeyboardButton(text="🏛️ Зал суда")],
-            [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏆 Рейтинг")],
-            [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="🎖️ Звания")],
-            [KeyboardButton(text="ℹ️ Как это работает")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Выбери действие…",
@@ -233,7 +237,7 @@ async def start(m: Message):
         "Начни с <b>🏛️ Зал суда</b>, чтобы посмотреть, как всё устроено, "
         "или нажми <b>📝 Подать дело</b>.",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
@@ -309,7 +313,7 @@ async def home(c: CallbackQuery):
     await c.message.answer(
         "⚖️ <b>Главное меню</b>\n\nВыбирай действие на клавиатуре ниже:",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(c.from_user.id),
     )
     await c.answer()
 
@@ -678,6 +682,20 @@ async def menu_help(m: Message):
         reply_markup=main_keyboard(),
     )
 
+
+
+@dp.message(F.text == "🛡️ CEO Панель")
+async def admin_button(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if not is_owner(m.from_user.id):
+        await m.answer("Раздел доступен только владельцу проекта.")
+        return
+    await state.clear()
+    await m.answer(
+        "🛡️ <b>CEO ANON VERDICT</b>\n\nВыбери раздел:",
+        parse_mode="HTML",
+        reply_markup=admin_menu(),
+    )
 
 
 @dp.message(Command("admin"))
