@@ -121,9 +121,8 @@ def is_owner(user_id):
 def main_keyboard(user_id=None):
     rows = [
         [KeyboardButton(text="📝 Подать дело"), KeyboardButton(text="🏛️ Зал суда")],
-        [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏆 Рейтинг")],
-        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="⭐ Избранное")],
-        [KeyboardButton(text="🎖️ Звания"), KeyboardButton(text="ℹ️ Как это работает")],
+        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="👤 Мой профиль")],
+        [KeyboardButton(text="⭐ Избранное"), KeyboardButton(text="🏆 Рейтинг")],
     ]
     if is_owner(user_id):
         rows.append([KeyboardButton(text="🛡️ CEO Панель")])
@@ -132,24 +131,23 @@ def main_keyboard(user_id=None):
         keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Выбери действие…",
+        input_field_placeholder="Что открыть?",
     )
 
 
 def home_inline(user_id=None):
     b = InlineKeyboardBuilder()
     b.button(text="🏛️ Зал суда", callback_data="feed:0")
+    b.button(text="📝 Подать дело", callback_data="new")
     b.button(text="⚖️ Мои дела", callback_data="my:0")
-    b.button(text="⭐ Избранное", callback_data="favorites:0")
     b.button(text="👤 Профиль", callback_data="profile")
+    b.button(text="⭐ Избранное", callback_data="favorites:0")
     b.button(text="🏆 Рейтинг", callback_data="rating:0")
-    b.button(text="🎖️ Звания", callback_data="ranks")
-    b.button(text="ℹ️ Как это работает", callback_data="help")
     if is_owner(user_id):
         b.button(text="🛡️ CEO Панель", callback_data="admin:home")
-        b.adjust(2, 2, 2, 1, 1)
-    else:
         b.adjust(2, 2, 2, 1)
+    else:
+        b.adjust(2, 2, 2)
     return b.as_markup()
 
 
@@ -179,6 +177,17 @@ async def safe_edit(message, text, reply_markup=None):
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
+
+
+async def present(message, text, reply_markup=None, edit=True):
+    if edit:
+        await safe_edit(message, text, reply_markup)
+    else:
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
 
 
 async def safe_notify(tg_id, text, reply_markup=None):
@@ -431,19 +440,19 @@ def case_keyboard(
     if not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
-            callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}",
-        )
-
-    if story["comments_count"]:
-        b.button(
-            text=f"💬 Советы ({story['comments_count']})",
-            callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     if not story["is_demo"]:
         b.button(
-            text=f"🗣 Обсуждение ({story['discussion_count']})",
-            callback_data=f"discuss:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+            text="🗣 Обсудить",
+            callback_data=f"discuss:{story['id']}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+
+    if story["comments_count"]:
+        b.button(
+            text=f"💬 Советы {story['comments_count']}",
+            callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     b.button(
@@ -452,26 +461,26 @@ def case_keyboard(
     )
     b.button(
         text="🧠 Разбор",
-        callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
 
     if not story["is_demo"] and not own_story:
         b.button(
-            text="🚩 Жалоба",
-            callback_data=f"report:story:{story['id']}",
+            text="•••",
+            callback_data=f"more:story:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
     if back_to == "my":
-        b.button(text="⬅️ К моим делам", callback_data=f"my:{feed_index}")
+        b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
     elif back_to == "favorites":
-        b.button(text="⬅️ К избранному", callback_data=f"favorites:{feed_index}")
+        b.button(text="⬅️ Избранное", callback_data=f"favorites:{feed_index}")
     else:
         b.button(
-            text="⬅️ Назад в ленту",
+            text="⬅️ В Зал суда",
             callback_data=f"feed:{feed_index}:{cat_key}:{sort}",
         )
 
-    b.adjust(2, 2, 1, 1)
+    b.adjust(2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -538,34 +547,41 @@ def comment_keyboard(
     feed_index,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
     b.button(
-        text=f"👍 {comment['likes']}",
-        callback_data=f"react:1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        text=f"👍 Полезно {comment['likes']}",
+        callback_data=f"react:1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text=f"👎 {comment['dislikes']}",
-        callback_data=f"react:-1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"react:-1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
-    b.button(
-        text="🚩 Жалоба",
-        callback_data=f"report:comment:{comment['id']}:{sid}",
-    )
+
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
         b,
-        f"comments:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
+        f"comments:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}:{back_to}",
         f"{index + 1}/{total}",
-        f"comments:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+        f"comments:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
+
+    b.button(
+        text="🗣 Обсудить",
+        callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
+    b.button(
+        text="•••",
+        callback_data=f"more:comment:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
-    b.adjust(2, 1, 3, 1)
+    b.adjust(2, 3, 2, 1)
     return b.as_markup()
 
 
@@ -731,36 +747,47 @@ async def render_discussion(
     )
 
 
-async def render_profile(message, user_id):
+async def render_profile(message, user_id, edit=True):
     u = await db.get_user(user_id)
+    stats = await db.profile_stats(user_id)
+
     role = ""
     if u["staff_role"] and u["staff_role"] != "SYSTEM":
         role = f"🛡️ <b>{h(u['staff_role'])}</b>\n"
 
     notifications_on = bool(u["notifications_enabled"])
-    notif_text = "🔔 Уведомления включены" if notifications_on else "🔕 Уведомления выключены"
+    notif_text = "🔔 Включены" if notifications_on else "🔕 Выключены"
+
+    next_thresholds = {1: 10, 2: 30, 3: 75, 4: 150}
+    next_threshold = next_thresholds.get(int(u["level"]))
+    if next_threshold:
+        progress_line = f"📈 До следующего звания: <b>{u['reputation']} / {next_threshold}</b>"
+    else:
+        progress_line = "👑 <b>Максимальное судебное звание</b>"
 
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Изменить профиль", callback_data="edit")
-    b.button(text="⭐ Избранное", callback_data="favorites:0")
+    b.button(text="✏️ Профиль", callback_data="edit")
     b.button(
-        text="🔕 Выключить уведомления" if notifications_on else "🔔 Включить уведомления",
+        text="🔕 Уведомления" if notifications_on else "🔔 Уведомления",
         callback_data="notifications:toggle",
     )
     b.button(text="🎖️ Звания", callback_data="ranks")
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 1, 1, 1)
+    b.button(text="ℹ️ Справка", callback_data="help")
+    b.adjust(2, 2)
 
-    await safe_edit(
+    await present(
         message,
         f"👤 <b>{h(u['nickname'])}</b>\n"
         f"{role}"
-        f"🎖️ {h(u['title'])}\n"
-        f"⭐ Репутация: {u['reputation']}\n"
-        f"📈 Уровень: {u['level']}\n"
+        f"🎖️ {h(u['title'])} · ⭐ <b>{u['reputation']}</b>\n"
+        f"{progress_line}\n\n"
+        f"⚖️ Дел: <b>{stats['stories_count'] if stats else 0}</b> · "
+        f"💬 Советов: <b>{stats['advice_count'] if stats else 0}</b> · "
+        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b>\n"
         f"{notif_text}\n\n"
         f"📝 {h(u['bio'] or 'Описание пока не добавлено.')}",
         b.as_markup(),
+        edit=edit,
     )
 
 
