@@ -115,3 +115,13 @@ Case authors can manage the lifecycle of their own real cases.
 - owner advice notifications are aggregated into one editable Telegram message per case
 - opening the advice pager marks current answers as read and refreshes the aggregate card
 - advice remains a one-card pager with previous/current/next navigation
+
+
+## Latest update UX v12
+
+- the newest author update is shown directly in the main case card
+- Court feed previews updated cases with the latest author update instead of stale original text
+- original case text remains visible below the latest update
+- reopened cases are explicitly marked and rise in the New feed
+- update history is shown only when multiple updates exist
+- saved-case update notifications open the normal case card, where the latest update is immediately visible
