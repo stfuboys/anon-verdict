@@ -1309,6 +1309,10 @@ async def cat(c: CallbackQuery, state: FSMContext):
 @dp.message(Story.title)
 async def title(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     text = text.strip()
     if not text:
@@ -1328,6 +1332,10 @@ async def title(m: Message, state: FSMContext):
 @dp.message(Story.body)
 async def body(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     text = text.strip()
     if not text:
@@ -1509,7 +1517,8 @@ async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("discuss:"))
-async def discussion_callback(c: CallbackQuery):
+async def discussion_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1654,7 +1663,8 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("dlike:"))
-async def discussion_like_callback(c: CallbackQuery):
+async def discussion_like_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -2040,7 +2050,8 @@ async def comment(m: Message, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("ai:"))
-async def ai_callback(c: CallbackQuery):
+async def ai_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -2092,6 +2103,10 @@ async def edit_profile(c: CallbackQuery, state: FSMContext):
 @dp.message(Profile.nickname)
 async def nick(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     text = text.strip()
     if not text:
@@ -2108,6 +2123,10 @@ async def nick(m: Message, state: FSMContext):
 @dp.message(Profile.bio)
 async def bio(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     if reasons:
         await m.answer("Удали из описания персональные данные или угрозы.")
@@ -2165,7 +2184,8 @@ async def favorite_case_callback(c: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("fav:"))
-async def favorite_toggle_callback(c: CallbackQuery):
+async def favorite_toggle_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -2286,7 +2306,8 @@ async def more_menu_callback(c: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data == "notifications:toggle")
-async def notifications_toggle_callback(c: CallbackQuery):
+async def notifications_toggle_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     enabled = await db.toggle_notifications(c.from_user.id)
     await render_profile(c.message, c.from_user.id)
@@ -2296,7 +2317,8 @@ async def notifications_toggle_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("report:"))
-async def report_menu_callback(c: CallbackQuery):
+async def report_menu_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     if len(parts) < 3:
@@ -2361,7 +2383,8 @@ async def report_menu_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("reportdo:"))
-async def report_submit_callback(c: CallbackQuery):
+async def report_submit_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     if len(parts) < 4:
