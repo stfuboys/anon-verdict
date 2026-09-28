@@ -562,8 +562,10 @@ class DB:
             story_row = await cur.fetchone()
             if not story_row:
                 return {"status": "story_not_found"}
-            if story_row[3] != "open":
+            if story_row[3] == "closed":
                 return {"status": "story_closed"}
+            if story_row[3] != "open":
+                return {"status": "story_unavailable"}
 
             cur = await db.execute(
                 """
