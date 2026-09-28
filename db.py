@@ -164,6 +164,7 @@ class DB:
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
             await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
             await self._ensure_column(db, "stories", "reopened_at", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "stories", "best_comment_id", "INTEGER")
             await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
@@ -861,10 +862,12 @@ class DB:
                     u.nickname,
                     u.title,
                     u.staff_role,
+                    CASE WHEN s.best_comment_id=c.id THEN 1 ELSE 0 END AS is_best,
                     (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=1) AS likes,
                     (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=-1) AS dislikes
                 FROM comments c
                 JOIN users u ON u.id=c.author_id
+                JOIN stories s ON s.id=c.story_id
                 WHERE c.story_id=? AND c.status='open'
                 ORDER BY c.created_at ASC
                 LIMIT 1 OFFSET ?
@@ -1651,6 +1654,63 @@ class DB:
                 (sid,),
             )
             return await cur.fetchone()
+
+    async def close_story_with_best(self, tg_id, sid, comment_id=None):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT s.id, s.status, s.best_comment_id
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=? AND u.tg_id=? AND s.is_demo=0
+                """,
+                (sid, tg_id),
+            )
+            story = await cur.fetchone()
+            if not story:
+                return {"status": "not_found"}
+            if story["status"] == "hidden":
+                return {"status": "moderated"}
+            if story["status"] == "deleted":
+                return {"status": "deleted"}
+            if story["status"] != "open":
+                return {"status": "not_open"}
+
+            selected = None
+            if comment_id is not None:
+                cur = await db.execute(
+                    """
+                    SELECT c.id, u.tg_id AS author_tg_id, u.nickname AS author_nickname
+                    FROM comments c
+                    JOIN users u ON u.id=c.author_id
+                    WHERE c.id=? AND c.story_id=? AND c.status='open'
+                    """,
+                    (comment_id, sid),
+                )
+                selected = await cur.fetchone()
+                if not selected:
+                    return {"status": "invalid_comment"}
+
+                await db.execute(
+                    "UPDATE stories SET status='closed', best_comment_id=? WHERE id=?",
+                    (comment_id, sid),
+                )
+            else:
+                await db.execute(
+                    "UPDATE stories SET status='closed' WHERE id=?",
+                    (sid,),
+                )
+
+            await db.commit()
+            result = {
+                "status": "updated",
+                "best_comment_id": comment_id if comment_id is not None else story["best_comment_id"],
+            }
+            if selected:
+                result["best_author_tg_id"] = selected["author_tg_id"]
+                result["best_author_nickname"] = selected["author_nickname"]
+            return result
 
     async def change_own_story_status(self, tg_id, sid, target_status):
         if target_status not in {"open", "closed", "deleted"}:
