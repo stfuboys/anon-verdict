@@ -592,16 +592,29 @@ async def render_comments(
     feed_index,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     total = await db.comment_count(sid)
     if total == 0:
         story = await db.story(sid)
+        if story:
+            favorite = await db.favorite_state(message.chat.id, sid)
+            own_story = int(story["author_tg_id"]) == int(message.chat.id)
+            keyboard = case_keyboard(
+                story,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+                favorite=favorite,
+                own_story=own_story,
+            )
+        else:
+            keyboard = home_inline(message.chat.id)
         await safe_edit(
             message,
-            "💬 <b>СОВЕТЫ</b>\n\nПока никто не высказался. Можно стать первым.",
-            case_keyboard(story, feed_index, "feed", cat_key, sort)
-            if story
-            else home_inline(),
+            "💬 <b>СОВЕТЫ</b>\n\nПока советов нет. Можно стать первым.",
+            keyboard,
         )
         return
 
@@ -618,91 +631,119 @@ async def render_comments(
             feed_index,
             cat_key,
             sort,
+            back_to,
         ),
     )
 
 
-def discussion_text(item, index, total):
-    is_author = item["author_id"] == item["story_author_id"]
-    author_label = "👑 Автор" if is_author else h(item["nickname"])
+DISCUSSION_PAGE_SIZE = 3
+DISCUSSION_MARKS = ("①", "②", "③")
 
-    staff = ""
-    if item["staff_role"] and item["staff_role"] != "SYSTEM":
-        staff = f" · 🛡️ {h(item['staff_role'])}"
 
-    reply_block = ""
-    if item["reply_to_id"] and item["reply_body"]:
-        reply_author = (
-            "👑 Автор"
-            if item["reply_author_id"] == item["story_author_id"]
-            else h(item["reply_nickname"] or "участнику")
+def discussion_window_text(rows, offset, total):
+    blocks = ["🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>"]
+    for pos, item in enumerate(rows):
+        mark = DISCUSSION_MARKS[pos]
+        is_author = item["author_id"] == item["story_author_id"]
+        author_label = "👑 Автор" if is_author else h(item["nickname"])
+        staff = ""
+        if item["staff_role"] and item["staff_role"] != "SYSTEM":
+            staff = f" · 🛡️ {h(item['staff_role'])}"
+
+        reply_block = ""
+        if item["reply_to_id"] and item["reply_body"]:
+            reply_author = (
+                "👑 Автор"
+                if item["reply_author_id"] == item["story_author_id"]
+                else h(item["reply_nickname"] or "участнику")
+            )
+            quote = str(item["reply_body"]).strip().replace("\n", " ")
+            if len(quote) > 110:
+                quote = quote[:110].rstrip() + "…"
+            reply_block = f"\n↩️ <i>{reply_author}: {h(quote)}</i>"
+
+        body = str(item["body"]).strip()
+        if len(body) > 650:
+            body = body[:650].rstrip() + "…"
+
+        blocks.append(
+            f"\n{mark} <b>{author_label}</b>{staff}"
+            f"{reply_block}\n{h(body)}\n"
+            f"👍 {item['likes']}"
         )
-        quote = str(item["reply_body"]).strip().replace("\n", " ")
-        if len(quote) > 140:
-            quote = quote[:140].rstrip() + "…"
-        reply_block = (
-            f"\n↩️ <i>Ответ {reply_author}: {h(quote)}</i>\n"
-        )
 
-    return (
-        "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-        f"<b>{author_label}</b>{staff}"
-        f"{reply_block}\n"
-        f"{h(item['body'])}\n\n"
-        f"👍 {item['likes']} · 📄 {index + 1} из {total}"
-    )
+    shown_from = offset + 1
+    shown_to = offset + len(rows)
+    blocks.append(f"\n📄 Сообщения {shown_from}–{shown_to} из {total}")
+    return "\n".join(blocks)
 
 
-def discussion_keyboard(item, sid, index, total, feed_index, cat_key="all", sort="new"):
+def discussion_window_keyboard(
+    rows,
+    sid,
+    offset,
+    total,
+    feed_index,
+    cat_key="all",
+    sort="new",
+    back_to="feed",
+):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
-    b.button(
-        text=f"👍 {item['likes']}",
-        callback_data=f"dlike:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
-    )
-    b.button(
-        text="↩️ Ответить",
-        callback_data=f"dreply:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
-    )
-    b.button(
-        text="🚩 Жалоба",
-        callback_data=f"report:discussion:{item['id']}:{sid}",
-    )
+    for pos, item in enumerate(rows):
+        mark = DISCUSSION_MARKS[pos]
+        b.button(
+            text=f"↩️ {mark}",
+            callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        b.button(
+            text=f"👍 {mark} {item['likes']}",
+            callback_data=f"dlike:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        b.button(
+            text=f"••• {mark}",
+            callback_data=f"more:discussion:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
 
-    if total > 1:
-        prev_i = (index - 1) % total
-        next_i = (index + 1) % total
-        nav_row(
-            b,
-            f"discuss:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
-            f"{index + 1}/{total}",
-            f"discuss:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+    older_offset = max(0, offset - DISCUSSION_PAGE_SIZE)
+    newer_offset = offset + DISCUSSION_PAGE_SIZE
+    if offset > 0:
+        b.button(
+            text="⬆️ Раньше",
+            callback_data=f"discuss:{sid}:{older_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+    if newer_offset < total:
+        b.button(
+            text="⬇️ Новее",
+            callback_data=f"discuss:{sid}:{newer_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     b.button(
         text="✍️ Написать",
-        callback_data=f"dwrite:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
 
-    if total > 1:
-        b.adjust(2, 1, 3, 1, 1)
-    else:
-        b.adjust(2, 1, 1, 1)
+    rows_layout = [3] * len(rows)
+    if offset > 0 or newer_offset < total:
+        rows_layout.append(2 if offset > 0 and newer_offset < total else 1)
+    rows_layout.extend([1, 1])
+    b.adjust(*rows_layout)
     return b.as_markup()
 
 
 async def render_discussion(
     message,
     sid,
-    index=0,
+    offset=0,
     feed_index=0,
     cat_key="all",
     sort="new",
+    back_to="feed",
 ):
     story = await db.story(sid)
     if not story or story["is_demo"]:
@@ -718,32 +759,41 @@ async def render_discussion(
         b = InlineKeyboardBuilder()
         b.button(
             text="✍️ Начать обсуждение",
-            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
         b.button(
             text="⬅️ К делу",
-            callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+            callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         b.adjust(1)
         await safe_edit(
             message,
             "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-            "Пока здесь тихо.\n"
-            "Можно задать вопрос автору, уточнить детали или обсудить ситуацию с другими.",
+            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации.",
             b.as_markup(),
         )
         return
 
-    index = clamp(index, 0, total - 1)
-    item = await db.discussion_item(sid, index)
-    if not item:
-        index = max(0, total - 1)
-        item = await db.discussion_item(sid, index)
+    max_offset = max(0, total - DISCUSSION_PAGE_SIZE)
+    offset = clamp(offset, 0, max_offset)
+    rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
+    if not rows:
+        offset = max_offset
+        rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
 
     await safe_edit(
         message,
-        discussion_text(item, index, total),
-        discussion_keyboard(item, sid, index, total, feed_index, cat_key, sort),
+        discussion_window_text(rows, offset, total),
+        discussion_window_keyboard(
+            rows,
+            sid,
+            offset,
+            total,
+            feed_index,
+            cat_key,
+            sort,
+            back_to,
+        ),
     )
 
 
@@ -791,17 +841,16 @@ async def render_profile(message, user_id, edit=True):
     )
 
 
-async def render_my_cases(message, user_id, index=0):
+async def render_my_cases(message, user_id, index=0, edit=True):
     total = await db.user_story_count(user_id)
     if total == 0:
         b = InlineKeyboardBuilder()
         b.button(text="📝 Подать первое дело", callback_data="new")
-        b.button(text="🏠 Главное меню", callback_data="home")
-        b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "⚖️ <b>МОИ ДЕЛА</b>\n\nТы ещё ничего не публиковал.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
@@ -809,62 +858,57 @@ async def render_my_cases(message, user_id, index=0):
     story = await db.user_story_item(user_id, index)
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
-        f"📜 <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"👁 {story['views']} просмотров · 💬 {story['comments_count']} советов\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
     b = InlineKeyboardBuilder()
-    b.button(text="📖 Открыть", callback_data=f"mycase:{story['id']}:{index}")
+    b.button(text="📖 Открыть дело", callback_data=f"mycase:{story['id']}:{index}")
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(b, f"my:{prev_i}", f"{index + 1}/{total}", f"my:{next_i}")
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 3, 1)
-    await safe_edit(message, text, b.as_markup())
+    b.adjust(1, 3)
+    await present(message, text, b.as_markup(), edit=edit)
 
 
-async def render_favorites(message, user_id, index=0):
+async def render_favorites(message, user_id, index=0, edit=True):
     total = await db.favorite_count(user_id)
     if total == 0:
         b = InlineKeyboardBuilder()
         b.button(text="🏛️ Найти дела", callback_data="feed:0")
-        b.button(text="🏠 Главное меню", callback_data="home")
-        b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-            "Здесь будут дела, которые ты сохранил. "
-            "По ним также можно получать уведомления о новых советах.",
+            "Сохраняй интересные дела — сюда попадут их карточки и важные обновления.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
     index = clamp(index, 0, total - 1)
     story = await db.favorite_item(user_id, index)
     if not story:
-        await safe_edit(
+        await present(
             message,
             "⭐ <b>ИЗБРАННОЕ</b>\n\nСписок изменился. Открой его ещё раз.",
             home_inline(user_id),
+            edit=edit,
         )
         return
 
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']}\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
 
     b = InlineKeyboardBuilder()
-    b.button(
-        text="📖 Открыть",
-        callback_data=f"favcase:{story['id']}:{index}",
-    )
+    b.button(text="📖 Открыть дело", callback_data=f"favcase:{story['id']}:{index}")
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
@@ -873,18 +917,18 @@ async def render_favorites(message, user_id, index=0):
         f"{index + 1}/{total}",
         f"favorites:{next_i}",
     )
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 3, 1)
-    await safe_edit(message, text, b.as_markup())
+    b.adjust(1, 3)
+    await present(message, text, b.as_markup(), edit=edit)
 
 
-async def render_rating(message, page=0):
+async def render_rating(message, page=0, edit=True):
     total = await db.leaderboard_count()
     if total == 0:
-        await safe_edit(
+        await present(
             message,
             "🏆 <b>РЕЙТИНГ</b>\n\nПока здесь пусто.",
-            home_inline(),
+            None,
+            edit=edit,
         )
         return
 
@@ -898,7 +942,7 @@ async def render_rating(message, page=0):
         staff = f" · 🛡️ {h(x['staff_role'])}" if x["staff_role"] else ""
         lines.append(
             f"<b>{i}.</b> {h(x['nickname'])} — ⭐ {x['reputation']} · {h(x['title'])}{staff}\n"
-            f"   💬 {x['advice_count']} советов · 👍 {x['helpful_likes']} полезных оценок"
+            f"   💬 {x['advice_count']} · 👍 {x['helpful_likes']}"
         )
 
     b = InlineKeyboardBuilder()
@@ -907,11 +951,12 @@ async def render_rating(message, page=0):
         next_p = (page + 1) % pages
         nav_row(b, f"rating:{prev_p}", f"{page + 1}/{pages}", f"rating:{next_p}")
         b.adjust(3)
-    b.button(text="🏠 Главное меню", callback_data="home")
-    await safe_edit(
+
+    await present(
         message,
         "🏆 <b>РЕЙТИНГ ЗАЛА</b>\n\n" + "\n".join(lines),
         b.as_markup(),
+        edit=edit,
     )
 
 
