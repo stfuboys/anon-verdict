@@ -97,6 +97,14 @@ class DB:
                     (role, tg_id),
                 )
 
+            cur = await db.execute("SELECT id, reputation FROM users WHERE tg_id != 0")
+            for user_id, reputation in await cur.fetchall():
+                level, title = progress_for(reputation)
+                await db.execute(
+                    "UPDATE users SET level=?, title=? WHERE id=?",
+                    (level, title, user_id),
+                )
+
             await self._seed_demo_content(db)
             await db.commit()
 
