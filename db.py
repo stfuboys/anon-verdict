@@ -1,3 +1,4 @@
+import json
 import aiosqlite
 from datetime import datetime, timezone
 
@@ -87,6 +88,13 @@ class DB:
                   last_seen_count INTEGER DEFAULT 0,
                   updated_at TEXT NOT NULL,
                   PRIMARY KEY(owner_id, story_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS pending_inputs(
+                  user_id INTEGER PRIMARY KEY,
+                  action TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS reactions(
@@ -342,6 +350,63 @@ class DB:
             )
             await db.commit()
             return cur.lastrowid
+
+    async def set_pending_input(self, tg_id, action, payload):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,))
+            row = await cur.fetchone()
+            if not row:
+                return False
+            await db.execute(
+                """
+                INSERT INTO pending_inputs(user_id, action, payload, updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  action=excluded.action,
+                  payload=excluded.payload,
+                  updated_at=excluded.updated_at
+                """,
+                (row[0], action, json.dumps(payload, ensure_ascii=False), now()),
+            )
+            await db.commit()
+            return True
+
+    async def pending_input(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT p.action, p.payload, p.updated_at
+                FROM pending_inputs p
+                JOIN users u ON u.id=p.user_id
+                WHERE u.tg_id=?
+                """,
+                (tg_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                return None
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            return {
+                "action": row["action"],
+                "payload": payload,
+                "updated_at": row["updated_at"],
+            }
+
+    async def clear_pending_input(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                DELETE FROM pending_inputs
+                WHERE user_id=(SELECT id FROM users WHERE tg_id=?)
+                """,
+                (tg_id,),
+            )
+            await db.commit()
+            return cur.rowcount > 0
 
     async def get_user(self, tg_id):
         async with aiosqlite.connect(self.path) as db:
