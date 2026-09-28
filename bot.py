@@ -2351,8 +2351,11 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
     if not story or story["is_demo"]:
         await c.answer("К демонстрационным делам советы не добавляются.", show_alert=True)
         return
-    if story["status"] != "open":
+    if story["status"] == "closed":
         await c.answer("Дело завершено. Новые советы больше не принимаются.", show_alert=True)
+        return
+    if story["status"] != "open":
+        await c.answer("Это дело сейчас недоступно.", show_alert=True)
         return
     if int(story["author_tg_id"]) == int(c.from_user.id):
         await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
@@ -2417,7 +2420,7 @@ async def comment(m: Message, state: FSMContext):
         )
         return
     if result.get("status") != "created":
-        await m.answer("Не удалось опубликовать совет. Дело недоступно.")
+        await m.answer("Дело стало недоступно. Совет не был опубликован.")
         return
 
     u = await db.get_user(m.from_user.id)
