@@ -669,13 +669,13 @@ async def render_story_updates(message, sid, feed_index=0, back_to="feed", cat_k
     if not story or story["status"] in {"hidden", "deleted"}:
         await safe_edit(message, "📝 Обновления дела недоступны.", home_inline(message.chat.id))
         return
-    rows = await db.story_updates(sid, 5)
+    rows = await db.story_updates(sid, 20)
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ К делу", callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
     if not rows:
         await safe_edit(message, "📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>\n\nПока обновлений нет.", b.as_markup())
         return
-    blocks = ["📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>"]
+    blocks = ["📚 <b>ИСТОРИЯ ОБНОВЛЕНИЙ</b>"]
     for n, row in enumerate(reversed(rows), 1):
         blocks.append(f"<b>Обновление {n}</b>\n{h(row['body'])}")
     await safe_edit(message, "\n\n".join(blocks), b.as_markup())
