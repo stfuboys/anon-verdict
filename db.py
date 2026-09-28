@@ -339,7 +339,7 @@ class DB:
                 SELECT
                     u.id,
                     (SELECT COUNT(*) FROM stories s
-                     WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                     WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c
                      WHERE c.author_id=u.id AND c.status='open') AS advice_count,
                     (
@@ -591,7 +591,7 @@ class DB:
                 await self._sync_progress(db, uid)
             await db.commit()
 
-            owner_tg_id, owner_notifications, story_title = story_row
+            owner_tg_id, owner_notifications, story_title, _story_status = story_row
             return {
                 "comment_id": comment_id,
                 "commenter_id": uid,
