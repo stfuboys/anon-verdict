@@ -465,7 +465,7 @@ def case_keyboard(
     if not story["is_demo"] and not own_story:
         b.button(
             text="•••",
-            callback_data=f"more:story:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+            callback_data=f"more:s:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
     if back_to == "my":
@@ -573,7 +573,7 @@ def comment_keyboard(
     )
     b.button(
         text="•••",
-        callback_data=f"more:comment:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        callback_data=f"more:c:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
@@ -701,7 +701,7 @@ def discussion_window_keyboard(
         )
         b.button(
             text=f"••• {mark}",
-            callback_data=f"more:discussion:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+            callback_data=f"more:d:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     older_offset = max(0, offset - DISCUSSION_PAGE_SIZE)
@@ -2136,7 +2136,7 @@ async def more_menu_callback(c: CallbackQuery):
         await c.answer("Некорректное меню", show_alert=True)
         return
 
-    target_type = parts[1]
+    target_type = {"s": "story", "c": "comment", "d": "discussion"}.get(parts[1], parts[1])
     b = InlineKeyboardBuilder()
 
     if target_type == "story":
