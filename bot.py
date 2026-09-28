@@ -559,7 +559,10 @@ async def render_case(
 
     if story["status"] == "deleted":
         b = InlineKeyboardBuilder()
-        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        if own_story:
+            b.button(text="⚖️ Мои дела", callback_data="my:0")
+        else:
+            b.button(text="🏛️ В Зал суда", callback_data="feed:0")
         await safe_edit(
             message,
             "🗑 <b>ДЕЛО УДАЛЕНО</b>\n\nЭто дело больше недоступно.",
@@ -2497,8 +2500,8 @@ async def ai_callback(c: CallbackQuery, state: FSMContext):
     back_to = parts[5] if len(parts) > 5 else "feed"
 
     story = await db.story(sid)
-    if not story:
-        await c.answer("Дело не найдено", show_alert=True)
+    if not story or story["status"] in {"hidden", "deleted"}:
+        await c.answer("Дело недоступно", show_alert=True)
         return
 
     result = await review(story["title"], story["body"])
