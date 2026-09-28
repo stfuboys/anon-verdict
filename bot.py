@@ -773,6 +773,7 @@ def comment_keyboard(
     cat_key="all",
     sort="new",
     back_to="feed",
+    discussion_open=True,
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
@@ -795,7 +796,7 @@ def comment_keyboard(
     )
 
     b.button(
-        text="🗣 Обсудить",
+        text="🗣 Обсудить" if discussion_open else "🗣 Обсуждение",
         callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
@@ -819,35 +820,48 @@ async def render_comments(
     sort="new",
     back_to="feed",
 ):
-    total = await db.comment_count(sid)
-    if total == 0:
-        story = await db.story(sid)
-        if story:
-            favorite = await db.favorite_state(message.chat.id, sid)
-            own_story = int(story["author_tg_id"]) == int(message.chat.id)
-            keyboard = case_keyboard(
-                story,
-                feed_index,
-                back_to,
-                cat_key,
-                sort,
-                favorite=favorite,
-                own_story=own_story,
-            )
-        else:
-            keyboard = home_inline(message.chat.id)
+    story = await db.story(sid)
+    if not story or story["status"] in {"hidden", "deleted"}:
         await safe_edit(
             message,
-            "💬 <b>СОВЕТЫ</b>\n\nПока советов нет. Можно стать первым.",
+            "💬 <b>СОВЕТЫ</b>\n\nЭто дело сейчас недоступно.",
+            home_inline(message.chat.id),
+        )
+        return
+
+    total = await db.comment_count(sid)
+    if total == 0:
+        favorite = await db.favorite_state(message.chat.id, sid)
+        own_story = int(story["author_tg_id"]) == int(message.chat.id)
+        keyboard = case_keyboard(
+            story,
+            feed_index,
+            back_to,
+            cat_key,
+            sort,
+            favorite=favorite,
+            own_story=own_story,
+        )
+        empty_text = (
+            "Пока советов нет. Можно стать первым."
+            if story["status"] == "open"
+            else "Дело завершено. Новые советы больше не принимаются."
+        )
+        await safe_edit(
+            message,
+            "💬 <b>СОВЕТЫ</b>\n\n" + empty_text,
             keyboard,
         )
         return
 
     index = clamp(index, 0, total - 1)
     comment = await db.comment_item(sid, index)
+    text = comment_text(comment, index, total)
+    if story["status"] == "closed":
+        text += "\n\n✅ <i>Дело завершено — новые советы закрыты.</i>"
     await safe_edit(
         message,
-        comment_text(comment, index, total),
+        text,
         comment_keyboard(
             comment,
             sid,
@@ -857,6 +871,7 @@ async def render_comments(
             cat_key,
             sort,
             back_to,
+            discussion_open=story["status"] == "open",
         ),
     )
 
