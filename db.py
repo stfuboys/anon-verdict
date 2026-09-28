@@ -647,7 +647,7 @@ class DB:
             if story["status"] in {"hidden", "deleted"}:
                 return {"status": "unavailable"}
 
-            now = utc_now()
+            now = now()
             cur = await db.execute(
                 """
                 INSERT INTO story_updates(story_id, author_id, body, created_at)
@@ -716,7 +716,7 @@ class DB:
                   last_seen_count=excluded.last_seen_count,
                   updated_at=excluded.updated_at
                 """,
-                (owner_id, sid, message_id, max(0, int(last_seen_count)), utc_now()),
+                (owner_id, sid, message_id, max(0, int(last_seen_count)), now()),
             )
             await db.commit()
             return True
@@ -736,7 +736,7 @@ class DB:
                   last_seen_count=MAX(advice_inbox.last_seen_count, excluded.last_seen_count),
                   updated_at=excluded.updated_at
                 """,
-                (owner_id, sid, max(0, int(seen_count)), utc_now()),
+                (owner_id, sid, max(0, int(seen_count)), now()),
             )
             await db.commit()
             return True
