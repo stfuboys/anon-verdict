@@ -911,6 +911,8 @@ async def render_comments(
         return
 
     total = await db.comment_count(sid)
+    if int(story["author_tg_id"]) == int(message.chat.id):
+        await db.mark_advice_seen(message.chat.id, sid, total)
     if total == 0:
         favorite = await db.favorite_state(message.chat.id, sid)
         own_story = int(story["author_tg_id"]) == int(message.chat.id)
@@ -1832,6 +1834,81 @@ async def mycase_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("updates:"))
+async def updates_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1]); feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True); return
+    back_to = parts[3] if len(parts)>3 else "feed"
+    cat_key = parts[4] if len(parts)>4 else "all"
+    sort = parts[5] if len(parts)>5 else "new"
+    await render_story_updates(c.message, sid, feed_index, back_to, cat_key, sort)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("life:update:"))
+async def lifecycle_update_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts=c.data.split(":")
+    try:
+        sid=int(parts[2]); feed_index=int(parts[3])
+    except (ValueError,IndexError):
+        await c.answer("Некорректное дело",show_alert=True); return
+    back_to=parts[4] if len(parts)>4 else "my"
+    cat_key=parts[5] if len(parts)>5 else "all"
+    sort=parts[6] if len(parts)>6 else "new"
+    story=await db.story(sid)
+    if not story or story["is_demo"] or int(story["author_tg_id"])!=int(c.from_user.id) or story["status"] not in {"open","closed"}:
+        await c.answer("Обновление недоступно.",show_alert=True); return
+    await state.set_state(StoryUpdate.body)
+    await state.update_data(sid=sid,feed_index=feed_index,back_to=back_to,cat_key=cat_key,sort=sort)
+    cancel=InlineKeyboardBuilder()
+    cancel.button(text="❌ Отменить",callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
+    await c.message.answer(
+        "📝 <b>ОБНОВИТЬ СИТУАЦИЮ</b>\n\nРасскажи, что изменилось после публикации дела. Старый текст останется на месте — обновление добавится в историю.",
+        parse_mode="HTML",reply_markup=cancel.as_markup()
+    )
+    await c.answer()
+
+
+@dp.message(StoryUpdate.body)
+async def story_update_message(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear(); await route_primary_navigation(m); return
+    body,reasons=moderate(m.text or ""); body=body.strip()
+    if not body:
+        await m.answer("Напиши обновление текстом."); return
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы."); return
+    d=await state.get_data()
+    result=await db.add_story_update(m.from_user.id,d["sid"],body)
+    await state.clear()
+    if result.get("status")!="created":
+        await m.answer("Не удалось добавить обновление. Дело недоступно."); return
+
+    story=await db.story(d["sid"])
+    followers=await db.favorite_subscribers(d["sid"],exclude_tg_ids=[m.from_user.id])
+    if followers:
+        b=InlineKeyboardBuilder()
+        b.button(text="📝 Читать обновление",callback_data=f"updates:{d['sid']}:0:feed:all:new")
+        asyncio.create_task(notify_many(
+            followers,
+            "📝 <b>Автор обновил сохранённое дело</b>\n\n"
+            f"⚖️ {h(story['title'])}\n"
+            f"{h(body[:500])}{'…' if len(body)>500 else ''}",
+            b.as_markup(),
+        ))
+    b=InlineKeyboardBuilder()
+    b.button(text="📖 К делу",callback_data=f"caseback:{d['sid']}:{d.get('feed_index',0)}:{d.get('back_to','my')}:{d.get('cat_key','all')}:{d.get('sort','new')}")
+    await m.answer("✅ <b>Обновление добавлено.</b>\n\nСтарый текст дела сохранён.",parse_mode="HTML",reply_markup=b.as_markup())
+
+
 @dp.callback_query(F.data.startswith("life:menu:"))
 async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2538,13 +2615,12 @@ async def comment(m: Message, state: FSMContext):
         and owner_tg_id
         and int(owner_tg_id) != int(m.from_user.id)
     ):
-        await safe_notify(
+        await upsert_advice_notification(
             owner_tg_id,
-            "💬 <b>Новый совет к твоему делу</b>\n\n"
-            f"⚖️ {h(result.get('story_title'))}\n"
-            f"🧠 {h(result.get('commenter_nickname'))} оставил новый совет.\n\n"
-            f"Всего ответов: <b>{advice_total}</b>",
-            open_answers.as_markup(),
+            d["sid"],
+            result.get("story_title"),
+            result.get("commenter_nickname"),
+            advice_total,
         )
 
     followers = await db.favorite_subscribers(
