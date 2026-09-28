@@ -92,6 +92,7 @@ CATS = [
 
 RATING_PAGE_SIZE = 10
 ADMIN_PAGE_SIZE = 5
+STORY_BODY_MIN = 30
 
 
 class Story(StatesGroup):
@@ -127,6 +128,14 @@ def h(value):
 
 def clamp(value, low, high):
     return max(low, min(value, high))
+
+
+def back_to_code(back_to):
+    return {"feed": "f", "my": "m", "favorites": "v"}.get(back_to, "f")
+
+
+def back_to_from_code(code):
+    return {"f": "feed", "m": "my", "v": "favorites"}.get(code, "feed")
 
 
 def is_owner(user_id):
@@ -555,11 +564,14 @@ def case_text(story):
         )
         content = reopen_prefix + h(body)
 
+    best_note = "🏆 Лучший ответ выбран автором\n\n" if story["best_comment_id"] else ""
+
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
         f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{content}\n\n"
+        f"{best_note}"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -820,6 +832,95 @@ async def render_case_management(
     )
 
 
+async def render_best_answer_picker(
+    message,
+    user_id,
+    sid,
+    index=0,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+        or story["status"] != "open"
+    ):
+        await safe_edit(message, "Выбор лучшего ответа недоступен.", home_inline(user_id))
+        return
+
+    total = await db.comment_count(sid)
+    if total == 0:
+        b = InlineKeyboardBuilder()
+        b.button(
+            text="✅ Да, завершить",
+            callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="⬅️ Не завершать",
+            callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.adjust(1)
+        await safe_edit(
+            message,
+            "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>\n\n"
+            "Ответов пока нет, поэтому выбирать лучший нечего.\n"
+            "После завершения новые советы и сообщения обсуждения будут закрыты.",
+            b.as_markup(),
+        )
+        return
+
+    index = clamp(index, 0, total - 1)
+    comment = await db.comment_item(sid, index)
+    if not comment:
+        await safe_edit(message, "Ответ не найден.", home_inline(user_id))
+        return
+
+    role = ""
+    if comment["staff_role"] and comment["staff_role"] != "SYSTEM":
+        role = f" · 🛡️ {h(comment['staff_role'])}"
+
+    back_code = back_to_code(back_to)
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="🏆 Выбрать этот ответ",
+        callback_data=f"bc:{comment['id']}:{sid}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+
+    prev_i = (index - 1) % total
+    next_i = (index + 1) % total
+    nav_row(
+        b,
+        f"bp:{sid}:{prev_i}:{feed_index}:{back_code}:{cat_key}:{sort}",
+        f"{index + 1}/{total}",
+        f"bp:{sid}:{next_i}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+
+    b.button(
+        text="✅ Завершить без выбора",
+        callback_data=f"bn:{sid}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ Не завершать",
+        callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1, 3, 1, 1)
+
+    await safe_edit(
+        message,
+        "🏆 <b>ВЫБЕРИ ЛУЧШИЙ ОТВЕТ</b>\n\n"
+        "Перед завершением можешь отметить совет, который оказался самым полезным.\n\n"
+        f"<b>{h(comment['nickname'])}</b> · {h(comment['title'])}{role}\n\n"
+        f"{h(comment['body'])}\n\n"
+        f"👍 {comment['likes']} · 👎 {comment['dislikes']}\n"
+        f"📄 {index + 1} из {total}",
+        b.as_markup(),
+    )
+
+
 async def render_lifecycle_confirmation(
     message,
     user_id,
@@ -846,15 +947,26 @@ async def render_lifecycle_confirmation(
                 message, user_id, sid, feed_index, back_to, cat_key, sort
             )
             return
+        if await db.comment_count(sid) > 0:
+            await render_best_answer_picker(
+                message,
+                user_id,
+                sid,
+                0,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+            )
+            return
         b.button(
             text="✅ Да, завершить",
             callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         title = "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>"
         body = (
-            "Оно исчезнет из активного Зала суда.\n"
-            "Новые советы и сообщения обсуждения будут закрыты.\n"
-            "Старые ответы останутся доступными для чтения.\n\n"
+            "Ответов пока нет. После завершения дело исчезнет из активного Зала суда.\n"
+            "Новые советы и сообщения обсуждения будут закрыты.\n\n"
             "Позже дело можно будет возобновить."
         )
     elif action == "d":
@@ -891,8 +1003,9 @@ def comment_text(comment, index, total):
     role = ""
     if comment["staff_role"] and comment["staff_role"] != "SYSTEM":
         role = f"\n🛡️ {h(comment['staff_role'])}"
+    best = "\n🏆 <b>Лучший ответ автора</b>" if comment["is_best"] else ""
     return (
-        f"💬 <b>СОВЕТЫ К ДЕЛУ</b>\n\n"
+        f"💬 <b>СОВЕТЫ К ДЕЛУ</b>{best}\n\n"
         f"<b>{h(comment['nickname'])}</b> · {h(comment['title'])}"
         f"{role}\n\n"
         f"{h(comment['body'])}\n\n"
@@ -1734,8 +1847,9 @@ async def title(m: Message, state: FSMContext):
     await state.update_data(title=text)
     await state.set_state(Story.body)
     await m.answer(
-        "Теперь расскажи ситуацию подробно.\n"
-        "Не указывай телефоны, адреса, документы и другие персональные данные."
+        f"Теперь расскажи ситуацию подробно — минимум <b>{STORY_BODY_MIN} символов</b>.\n"
+        "Не указывай телефоны, адреса, документы и другие персональные данные.",
+        parse_mode="HTML",
     )
 
 
@@ -1753,6 +1867,14 @@ async def body(m: Message, state: FSMContext):
         return
     if reasons:
         await m.answer("Удали из текста персональные данные или угрозы.")
+        return
+    if len(text) < STORY_BODY_MIN:
+        missing = STORY_BODY_MIN - len(text)
+        await m.answer(
+            f"✍️ Слишком коротко: <b>{len(text)}/{STORY_BODY_MIN}</b> символов.\n"
+            f"Добавь ещё минимум <b>{missing}</b>.",
+            parse_mode="HTML",
+        )
         return
 
     if not is_owner(m.from_user.id):
@@ -2069,6 +2191,136 @@ async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("bp:"))
+async def best_answer_page_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[4] if len(parts) > 4 else "m")
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    await render_best_answer_picker(
+        c.message,
+        c.from_user.id,
+        sid,
+        index,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("bc:"))
+async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        comment_id = int(parts[1])
+        sid = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[4] if len(parts) > 4 else "m")
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    result = await db.close_story_with_best(
+        c.from_user.id,
+        sid,
+        comment_id=comment_id,
+    )
+    status = result.get("status")
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status != "updated":
+        await c.answer("Не удалось завершить дело с этим ответом.", show_alert=True)
+        return
+
+    best_author_tg_id = result.get("best_author_tg_id")
+    if (
+        result.get("best_author_notifications")
+        and best_author_tg_id
+        and int(best_author_tg_id) != int(c.from_user.id)
+    ):
+        b = InlineKeyboardBuilder()
+        b.button(text="📖 Открыть дело", callback_data=f"case:{sid}:0:all:new")
+        await safe_notify(
+            best_author_tg_id,
+            "🏆 <b>Автор выбрал твой совет лучшим</b>\n\n"
+            "Дело завершено, а твой ответ отмечен как лучший.",
+            b.as_markup(),
+        )
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("🏆 Лучший ответ выбран. Дело завершено")
+
+
+@dp.callback_query(F.data.startswith("bn:"))
+async def best_answer_none_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[3] if len(parts) > 3 else "m")
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    result = await db.close_story_with_best(c.from_user.id, sid)
+    status = result.get("status")
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status != "updated":
+        await c.answer("Не удалось завершить дело.", show_alert=True)
+        return
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("✅ Дело завершено без выбора лучшего ответа")
+
+
 @dp.callback_query(F.data.startswith("life:confirm:"))
 async def lifecycle_confirm_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2122,7 +2374,23 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
         await c.answer("Некорректное действие", show_alert=True)
         return
 
-    result = await db.change_own_story_status(c.from_user.id, sid, target)
+    if action == "c":
+        if await db.comment_count(sid) > 0:
+            await render_best_answer_picker(
+                c.message,
+                c.from_user.id,
+                sid,
+                0,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+            )
+            await c.answer()
+            return
+        result = await db.close_story_with_best(c.from_user.id, sid)
+    else:
+        result = await db.change_own_story_status(c.from_user.id, sid, target)
     status = result.get("status")
 
     if status == "moderated":
