@@ -1685,7 +1685,11 @@ class DB:
             if comment_id is not None:
                 cur = await db.execute(
                     """
-                    SELECT c.id, u.tg_id AS author_tg_id, u.nickname AS author_nickname
+                    SELECT
+                        c.id,
+                        u.tg_id AS author_tg_id,
+                        u.nickname AS author_nickname,
+                        u.notifications_enabled AS author_notifications
                     FROM comments c
                     JOIN users u ON u.id=c.author_id
                     WHERE c.id=? AND c.story_id=? AND c.status='open'
@@ -1714,6 +1718,7 @@ class DB:
             if selected:
                 result["best_author_tg_id"] = selected["author_tg_id"]
                 result["best_author_nickname"] = selected["author_nickname"]
+                result["best_author_notifications"] = bool(selected["author_notifications"])
             return result
 
     async def change_own_story_status(self, tg_id, sid, target_status):
