@@ -285,6 +285,15 @@ def feed_case_status(story):
     return "🟢 Открыто"
 
 
+def story_status_label(status):
+    return {
+        "open": "🟢 Открыто",
+        "closed": "✅ Завершено",
+        "hidden": "🙈 Скрыто модерацией",
+        "deleted": "🗑 Удалено",
+    }.get(status, h(status))
+
+
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
 
@@ -434,12 +443,18 @@ def case_text(story):
             "\n\n🧪 <i>Демонстрационный пример от Anon Verdict. "
             "Это не история реального пользователя.</i>"
         )
+
+    status_line = ""
+    if not story["is_demo"]:
+        status_line = f"\n{story_status_label(story['status'])}"
+
     body = h(story["body"][:3000])
     if len(story["body"]) > 3000:
         body += "…"
+
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}\n\n"
+        f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
@@ -459,8 +474,9 @@ def case_keyboard(
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
+    status = story["status"]
 
-    if not story["is_demo"] and not own_story:
+    if status == "open" and not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
             callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -468,7 +484,7 @@ def case_keyboard(
 
     if not story["is_demo"]:
         b.button(
-            text="🗣 Обсудить",
+            text="🗣 Обсудить" if status == "open" else "🗣 Обсуждение",
             callback_data=f"discuss:{story['id']}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
@@ -480,10 +496,17 @@ def case_keyboard(
             callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    b.button(
-        text="✅ Сохранено" if favorite else "⭐ Сохранить",
-        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
-    )
+    if own_story and not story["is_demo"] and status in {"open", "closed"}:
+        b.button(
+            text="⚙️ Управление",
+            callback_data=f"life:menu:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+    elif not own_story:
+        b.button(
+            text="✅ Сохранено" if favorite else "⭐ Сохранить",
+            callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+
     b.button(
         text="🧠 Разбор",
         callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -532,8 +555,37 @@ async def render_case(
         )
         return
 
-    favorite = await db.favorite_state(viewer_id, sid)
     own_story = int(story["author_tg_id"]) == int(viewer_id)
+
+    if story["status"] == "deleted":
+        b = InlineKeyboardBuilder()
+        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        await safe_edit(
+            message,
+            "🗑 <b>ДЕЛО УДАЛЕНО</b>\n\nЭто дело больше недоступно.",
+            b.as_markup(),
+        )
+        return
+
+    if story["status"] == "hidden":
+        if own_story:
+            b = InlineKeyboardBuilder()
+            b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
+            await safe_edit(
+                message,
+                "🙈 <b>ДЕЛО СКРЫТО МОДЕРАЦИЕЙ</b>\n\n"
+                "Оно не показывается другим пользователям и недоступно для управления.",
+                b.as_markup(),
+            )
+        else:
+            await safe_edit(
+                message,
+                "Это дело сейчас недоступно.",
+                home_inline(viewer_id),
+            )
+        return
+
+    favorite = await db.favorite_state(viewer_id, sid)
 
     await safe_edit(
         message,
