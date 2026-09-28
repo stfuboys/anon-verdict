@@ -406,3 +406,113 @@ class DB:
                 (limit,),
             )
             return await cur.fetchall()
+
+    async def admin_stats(self):
+        async with aiosqlite.connect(self.path) as db:
+            stats = {}
+            queries = {
+                "users": "SELECT COUNT(*) FROM users WHERE tg_id != 0",
+                "staff": "SELECT COUNT(*) FROM users WHERE tg_id != 0 AND COALESCE(staff_role, '') != ''",
+                "stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0",
+                "open_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='open'",
+                "hidden_stories": "SELECT COUNT(*) FROM stories WHERE is_demo=0 AND status='hidden'",
+                "comments": "SELECT COUNT(*) FROM comments",
+                "reactions": "SELECT COUNT(*) FROM reactions",
+            }
+            for key, sql in queries.items():
+                cur = await db.execute(sql)
+                stats[key] = (await cur.fetchone())[0]
+            return stats
+
+    async def recent_users(self, limit=10):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    u.*,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
+                FROM users u
+                WHERE u.tg_id != 0
+                ORDER BY u.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return await cur.fetchall()
+
+    async def admin_user(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    u.*,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
+                FROM users u
+                WHERE u.tg_id=?
+                """,
+                (tg_id,),
+            )
+            return await cur.fetchone()
+
+    async def set_staff_role(self, tg_id, role):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE users SET staff_role=? WHERE tg_id=? AND tg_id != 0",
+                ((role or "")[:64], tg_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def recent_stories_admin(self, limit=10):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    s.*,
+                    u.tg_id AS author_tg_id,
+                    u.nickname AS author_nickname,
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.is_demo=0
+                ORDER BY s.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return await cur.fetchall()
+
+    async def admin_story(self, sid):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    s.*,
+                    u.tg_id AS author_tg_id,
+                    u.nickname AS author_nickname,
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
+                FROM stories s
+                JOIN users u ON u.id=s.author_id
+                WHERE s.id=? AND s.is_demo=0
+                """,
+                (sid,),
+            )
+            return await cur.fetchone()
+
+    async def set_story_status(self, sid, status):
+        if status not in {"open", "hidden"}:
+            raise ValueError("Unsupported story status")
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "UPDATE stories SET status=? WHERE id=? AND is_demo=0",
+                (status, sid),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
