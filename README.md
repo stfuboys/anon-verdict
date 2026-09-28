@@ -67,3 +67,17 @@ Each real case now has its own discussion area, separate from formal advice.
 - direct replies can notify the recipient
 - followers of a saved case are notified when the case author posts in the discussion
 - discussion posting has its own cooldown to reduce spam
+
+
+## UX v6
+
+The Telegram interface is streamlined around a smaller number of primary actions.
+
+- persistent keyboard now contains only the six core destinations
+- ranks and help live inside the profile instead of the global keyboard
+- case cards prioritize advice and discussion; reports are moved under secondary actions
+- advice, AI analysis, discussion, favorites, and personal cases preserve return context
+- discussions show compact windows of recent messages instead of one message per screen
+- profile shows case/advice/helpful-like stats and progress toward the next rank
+- primary reply-keyboard navigation renders the destination directly without temporary “opening…” messages
+- back-button wording and empty states are standardized
