@@ -1893,6 +1893,73 @@ async def admin_stats_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("admin:reports:"))
+async def admin_reports_callback(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        page = int(c.data.split(":")[2])
+    except (ValueError, IndexError):
+        page = 0
+    await render_admin_reports(c.message, page)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:report:"))
+async def admin_report_callback(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        _, _, report_id, page = c.data.split(":")
+        report_id, page = int(report_id), int(page)
+    except (ValueError, IndexError):
+        await c.answer("Некорректная жалоба", show_alert=True)
+        return
+    await render_admin_report(c.message, report_id, page)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:reportact:"))
+async def admin_report_action_callback(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, _, report_id, action, page = c.data.split(":")
+        report_id, page = int(report_id), int(page)
+    except (ValueError, IndexError):
+        await c.answer("Некорректная команда", show_alert=True)
+        return
+
+    report = await db.admin_report(report_id)
+    if not report or report["status"] != "open":
+        await c.answer("Жалоба уже обработана.", show_alert=True)
+        await render_admin_reports(c.message, page)
+        return
+
+    if action == "dismiss":
+        await db.resolve_report(report_id, "dismissed")
+        await render_admin_reports(c.message, page)
+        await c.answer("Жалоба отклонена.")
+        return
+
+    if action != "hide":
+        await c.answer("Неизвестное действие", show_alert=True)
+        return
+
+    if report["target_type"] == "story":
+        await db.set_story_status(report["target_id"], "hidden")
+    else:
+        await db.set_comment_status(report["target_id"], "hidden")
+
+    await db.resolve_report(report_id, "resolved")
+    await render_admin_reports(c.message, page)
+    await c.answer("Материал скрыт, жалоба закрыта.")
+
+
 @dp.callback_query(F.data.startswith("admin:users:"))
 async def admin_users_callback(c: CallbackQuery):
     if not is_owner(c.from_user.id):
