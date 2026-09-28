@@ -91,6 +91,19 @@ class DB:
             await self._ensure_column(db, "users", "staff_role", "TEXT DEFAULT ''")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
 
+            await db.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS idx_stories_feed
+                  ON stories(status, is_demo, created_at);
+                CREATE INDEX IF NOT EXISTS idx_stories_author
+                  ON stories(author_id, is_demo, created_at);
+                CREATE INDEX IF NOT EXISTS idx_comments_story
+                  ON comments(story_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_users_reputation
+                  ON users(reputation DESC, created_at);
+                """
+            )
+
             for tg_id, role in self.staff_roles.items():
                 await db.execute(
                     "UPDATE users SET staff_role=? WHERE tg_id=?",
@@ -228,10 +241,7 @@ class DB:
             await db.commit()
 
     async def _sync_progress(self, db, user_id):
-        cur = await db.execute(
-            "SELECT reputation FROM users WHERE id=?",
-            (user_id,),
-        )
+        cur = await db.execute("SELECT reputation FROM users WHERE id=?", (user_id,))
         row = await cur.fetchone()
         if not row:
             return
@@ -269,7 +279,10 @@ class DB:
                 await db.commit()
             cur = await db.execute(
                 """
-                SELECT s.*, u.nickname
+                SELECT
+                    s.*,
+                    u.nickname,
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -278,40 +291,49 @@ class DB:
             )
             return await cur.fetchone()
 
-    async def latest(self, limit=10):
+    async def feed_count(self):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM stories WHERE status='open'"
+            )
+            return (await cur.fetchone())[0]
+
+    async def feed_item(self, offset=0):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-
             cur = await db.execute(
                 """
-                SELECT s.*, u.nickname
+                SELECT
+                    s.*,
+                    u.nickname,
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id) AS comments_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
-                WHERE s.status='open' AND s.is_demo=0
-                ORDER BY s.created_at DESC
-                LIMIT ?
+                WHERE s.status='open'
+                ORDER BY
+                    s.is_demo ASC,
+                    CASE WHEN s.is_demo=0 THEN s.created_at END DESC,
+                    CASE WHEN s.is_demo=1 THEN s.id END ASC
+                LIMIT 1 OFFSET ?
                 """,
-                (limit,),
+                (max(0, offset),),
             )
-            real = list(await cur.fetchall())
-            if len(real) >= limit:
-                return real
+            return await cur.fetchone()
 
+    async def user_story_count(self, tg_id):
+        async with aiosqlite.connect(self.path) as db:
             cur = await db.execute(
                 """
-                SELECT s.*, u.nickname
+                SELECT COUNT(*)
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
-                WHERE s.status='open' AND s.is_demo=1
-                ORDER BY s.id ASC
-                LIMIT ?
+                WHERE u.tg_id=? AND s.is_demo=0
                 """,
-                (limit - len(real),),
+                (tg_id,),
             )
-            demos = list(await cur.fetchall())
-            return real + demos
+            return (await cur.fetchone())[0]
 
-    async def user_stories(self, tg_id, limit=10):
+    async def user_story_item(self, tg_id, offset=0):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -323,11 +345,11 @@ class DB:
                 JOIN users u ON u.id=s.author_id
                 WHERE u.tg_id=? AND s.is_demo=0
                 ORDER BY s.created_at DESC
-                LIMIT ?
+                LIMIT 1 OFFSET ?
                 """,
-                (tg_id, limit),
+                (tg_id, max(0, offset)),
             )
-            return await cur.fetchall()
+            return await cur.fetchone()
 
     async def comment(self, tg_id, sid, body):
         async with aiosqlite.connect(self.path) as db:
@@ -351,7 +373,15 @@ class DB:
             await self._sync_progress(db, uid)
             await db.commit()
 
-    async def comments(self, sid):
+    async def comment_count(self, sid):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM comments WHERE story_id=?",
+                (sid,),
+            )
+            return (await cur.fetchone())[0]
+
+    async def comment_item(self, sid, offset=0):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -361,16 +391,17 @@ class DB:
                     u.nickname,
                     u.title,
                     u.staff_role,
-                    (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=1) likes,
-                    (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=-1) dislikes
+                    (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=1) AS likes,
+                    (SELECT COUNT(*) FROM reactions r WHERE r.comment_id=c.id AND r.value=-1) AS dislikes
                 FROM comments c
                 JOIN users u ON u.id=c.author_id
                 WHERE c.story_id=?
                 ORDER BY c.created_at ASC
+                LIMIT 1 OFFSET ?
                 """,
-                (sid,),
+                (sid, max(0, offset)),
             )
-            return await cur.fetchall()
+            return await cur.fetchone()
 
     async def react(self, tg_id, cid, value):
         value = 1 if value > 0 else -1
@@ -392,7 +423,12 @@ class DB:
             )
             await db.commit()
 
-    async def leaderboard(self, limit=10):
+    async def leaderboard_count(self):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM users WHERE tg_id != 0")
+            return (await cur.fetchone())[0]
+
+    async def leaderboard_page(self, offset=0, limit=10):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -401,9 +437,9 @@ class DB:
                 FROM users
                 WHERE tg_id != 0
                 ORDER BY reputation DESC, created_at ASC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (limit,),
+                (limit, max(0, offset)),
             )
             return await cur.fetchall()
 
@@ -424,7 +460,12 @@ class DB:
                 stats[key] = (await cur.fetchone())[0]
             return stats
 
-    async def recent_users(self, limit=10):
+    async def admin_user_count(self):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM users WHERE tg_id != 0")
+            return (await cur.fetchone())[0]
+
+    async def admin_users_page(self, offset=0, limit=5):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -436,9 +477,9 @@ class DB:
                 FROM users u
                 WHERE u.tg_id != 0
                 ORDER BY u.created_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (limit,),
+                (limit, max(0, offset)),
             )
             return await cur.fetchall()
 
@@ -467,7 +508,14 @@ class DB:
             await db.commit()
             return cur.rowcount > 0
 
-    async def recent_stories_admin(self, limit=10):
+    async def admin_story_count(self):
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM stories WHERE is_demo=0"
+            )
+            return (await cur.fetchone())[0]
+
+    async def admin_stories_page(self, offset=0, limit=5):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -481,9 +529,9 @@ class DB:
                 JOIN users u ON u.id=s.author_id
                 WHERE s.is_demo=0
                 ORDER BY s.created_at DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (limit,),
+                (limit, max(0, offset)),
             )
             return await cur.fetchall()
 
@@ -515,4 +563,3 @@ class DB:
             )
             await db.commit()
             return cur.rowcount > 0
-
