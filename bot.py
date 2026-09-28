@@ -1426,6 +1426,33 @@ async def case_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("caseback:"))
+async def case_back_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[3] if len(parts) > 3 else "feed"
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    await render_case(
+        c.message,
+        sid,
+        index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer()
+
+
 @dp.callback_query(F.data.startswith("mycase:"))
 async def mycase_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -1445,7 +1472,7 @@ async def discussion_callback(c: CallbackQuery):
     parts = c.data.split(":")
     try:
         sid = int(parts[1])
-        index = int(parts[2])
+        raw_offset = parts[2]
         feed_index = int(parts[3])
     except (ValueError, IndexError):
         await c.answer("Некорректное обсуждение", show_alert=True)
@@ -1453,14 +1480,25 @@ async def discussion_callback(c: CallbackQuery):
 
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
+
+    if raw_offset == "latest":
+        total = await db.discussion_count(sid)
+        offset = max(0, total - DISCUSSION_PAGE_SIZE)
+    else:
+        try:
+            offset = int(raw_offset)
+        except ValueError:
+            offset = 0
 
     await render_discussion(
         c.message,
         sid,
-        index,
+        offset,
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer()
 
@@ -1471,7 +1509,7 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
     parts = c.data.split(":")
     try:
         sid = int(parts[1])
-        index = int(parts[2])
+        offset = int(parts[2])
         feed_index = int(parts[3])
     except (ValueError, IndexError):
         await c.answer("Некорректное обсуждение", show_alert=True)
@@ -1479,6 +1517,7 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.discussion_cooldown_remaining(c.from_user.id)
@@ -1496,16 +1535,18 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
 
     await state.update_data(
         discussion_sid=sid,
-        discussion_index=index,
+        discussion_offset=offset,
         discussion_feed_index=feed_index,
         discussion_cat_key=cat_key,
         discussion_sort=sort,
+        discussion_back_to=back_to,
         discussion_reply_to=None,
     )
     await state.set_state(Discussion.body)
     await c.message.answer(
-        "🗣 Напиши сообщение в обсуждение.\n\n"
-        "Здесь можно задавать вопросы, уточнять детали и отвечать другим участникам."
+        "🗣 <b>Новое сообщение</b>\n\n"
+        "Напиши вопрос, уточнение или мнение.",
+        parse_mode="HTML",
     )
     await c.answer()
 
@@ -1517,7 +1558,7 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
     try:
         message_id = int(parts[1])
         sid = int(parts[2])
-        index = int(parts[3])
+        offset = int(parts[3])
         feed_index = int(parts[4])
     except (ValueError, IndexError):
         await c.answer("Некорректный ответ", show_alert=True)
@@ -1525,6 +1566,7 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
 
     cat_key = parts[5] if len(parts) > 5 else "all"
     sort = parts[6] if len(parts) > 6 else "new"
+    back_to = parts[7] if len(parts) > 7 else "feed"
 
     if not is_owner(c.from_user.id):
         remaining = await db.discussion_cooldown_remaining(c.from_user.id)
@@ -1546,15 +1588,16 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
 
     await state.update_data(
         discussion_sid=sid,
-        discussion_index=index,
+        discussion_offset=offset,
         discussion_feed_index=feed_index,
         discussion_cat_key=cat_key,
         discussion_sort=sort,
+        discussion_back_to=back_to,
         discussion_reply_to=message_id,
     )
     await state.set_state(Discussion.body)
     await c.message.answer(
-        "↩️ <b>Ответ на сообщение:</b>\n"
+        "↩️ <b>Ответ на сообщение</b>\n"
         f"<i>{h(quote)}</i>\n\n"
         "Напиши ответ:",
         parse_mode="HTML",
@@ -1569,7 +1612,7 @@ async def discussion_like_callback(c: CallbackQuery):
     try:
         message_id = int(parts[1])
         sid = int(parts[2])
-        index = int(parts[3])
+        offset = int(parts[3])
         feed_index = int(parts[4])
     except (ValueError, IndexError):
         await c.answer("Некорректная реакция", show_alert=True)
@@ -1577,6 +1620,7 @@ async def discussion_like_callback(c: CallbackQuery):
 
     cat_key = parts[5] if len(parts) > 5 else "all"
     sort = parts[6] if len(parts) > 6 else "new"
+    back_to = parts[7] if len(parts) > 7 else "feed"
 
     result = await db.toggle_discussion_like(c.from_user.id, message_id)
     if result["status"] == "self":
@@ -1589,10 +1633,11 @@ async def discussion_like_callback(c: CallbackQuery):
     await render_discussion(
         c.message,
         sid,
-        index,
+        offset,
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer("👍 Отметка добавлена" if result["liked"] else "👍 Отметка снята")
 
@@ -1722,6 +1767,8 @@ async def comments_callback(c: CallbackQuery):
         return
     cat_key = parts[4] if len(parts) > 4 else "all"
     sort = parts[5] if len(parts) > 5 else "new"
+    back_to = parts[6] if len(parts) > 6 else "feed"
+
     await render_comments(
         c.message,
         sid,
@@ -1729,6 +1776,7 @@ async def comments_callback(c: CallbackQuery):
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
     await c.answer()
 
@@ -1749,6 +1797,7 @@ async def react_callback(c: CallbackQuery):
 
     cat_key = parts[6] if len(parts) > 6 else "all"
     sort = parts[7] if len(parts) > 7 else "new"
+    back_to = parts[8] if len(parts) > 8 else "feed"
 
     result = await db.react(c.from_user.id, cid, value)
     if result["status"] == "self":
@@ -1768,6 +1817,7 @@ async def react_callback(c: CallbackQuery):
         feed_index,
         cat_key,
         sort,
+        back_to,
     )
 
     delta = result.get("reputation_delta", 0)
@@ -1781,7 +1831,7 @@ async def react_callback(c: CallbackQuery):
             rb = InlineKeyboardBuilder()
             rb.button(
                 text="💬 Открыть советы",
-                callback_data=f"comments:{sid}:0:0:all:new",
+                callback_data=f"comments:{sid}:0:0:all:new:feed",
             )
             await safe_notify(
                 result["author_tg_id"],
