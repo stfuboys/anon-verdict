@@ -621,10 +621,25 @@ class DB:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 """
-                SELECT nickname, title, reputation, level, staff_role
-                FROM users
-                WHERE tg_id != 0
-                ORDER BY reputation DESC, created_at ASC
+                SELECT
+                    u.nickname,
+                    u.title,
+                    u.reputation,
+                    u.level,
+                    u.staff_role,
+                    (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id AND c.status='open') AS advice_count,
+                    (
+                        SELECT COUNT(*)
+                        FROM reactions r
+                        JOIN comments c2 ON c2.id=r.comment_id
+                        WHERE c2.author_id=u.id
+                          AND c2.status='open'
+                          AND r.value=1
+                          AND r.user_id != u.id
+                    ) AS helpful_likes
+                FROM users u
+                WHERE u.tg_id != 0
+                ORDER BY u.reputation DESC, helpful_likes DESC, u.created_at ASC
                 LIMIT ? OFFSET ?
                 """,
                 (limit, max(0, offset)),
@@ -768,11 +783,14 @@ class DB:
 
             table = "stories" if target_type == "story" else "comments"
             cur = await db.execute(
-                f"SELECT 1 FROM {table} WHERE id=?",
+                f"SELECT author_id FROM {table} WHERE id=?",
                 (target_id,),
             )
-            if not await cur.fetchone():
+            target_row = await cur.fetchone()
+            if not target_row:
                 return {"status": "target_not_found"}
+            if target_row[0] == reporter_id:
+                return {"status": "self"}
 
             cur = await db.execute(
                 """
