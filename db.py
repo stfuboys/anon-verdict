@@ -647,13 +647,13 @@ class DB:
             if story["status"] in {"hidden", "deleted"}:
                 return {"status": "unavailable"}
 
-            now = now()
+            created_at = now()
             cur = await db.execute(
                 """
                 INSERT INTO story_updates(story_id, author_id, body, created_at)
                 VALUES(?,?,?,?)
                 """,
-                (sid, story["author_id"], body, now),
+                (sid, story["author_id"], body, created_at),
             )
             update_id = cur.lastrowid
             await db.commit()
