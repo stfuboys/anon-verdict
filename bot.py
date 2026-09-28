@@ -1435,7 +1435,12 @@ async def render_admin_cases(message, page=0):
 
     b = InlineKeyboardBuilder()
     for s in rows:
-        icon = "🟢" if s["status"] == "open" else "🙈"
+        icon = {
+            "open": "🟢",
+            "closed": "✅",
+            "deleted": "🗑",
+            "hidden": "🙈",
+        }.get(s["status"], "⚪")
         b.button(
             text=f"{icon} #{s['id']} · {str(s['title'])[:24]}",
             callback_data=f"admin:story:{s['id']}:{page}",
@@ -1449,7 +1454,7 @@ async def render_admin_cases(message, page=0):
 
     await safe_edit(
         message,
-        "⚖️ <b>ДЕЛА</b>\n\n🟢 открыто · 🙈 скрыто",
+        "⚖️ <b>ДЕЛА</b>\n\n🟢 открыто · ✅ завершено · 🗑 удалено · 🙈 скрыто",
         b.as_markup(),
     )
 
@@ -1460,7 +1465,12 @@ async def render_admin_story(message, sid, page=0):
         await safe_edit(message, "Дело не найдено.", admin_menu())
         return
 
-    status = "🟢 открыто" if s["status"] == "open" else "🙈 скрыто"
+    status = {
+        "open": "🟢 открыто",
+        "closed": "✅ завершено",
+        "deleted": "🗑 удалено",
+        "hidden": "🙈 скрыто",
+    }.get(s["status"], h(s["status"]))
     body = h(s["body"][:2200])
     if len(s["body"]) > 2200:
         body += "…"
@@ -1477,10 +1487,13 @@ async def render_admin_story(message, sid, page=0):
     )
 
     b = InlineKeyboardBuilder()
-    if s["status"] == "open":
+    if s["status"] in {"open", "closed"}:
         b.button(text="🙈 Скрыть дело", callback_data=f"admin:status:{sid}:hidden:{page}")
-    else:
-        b.button(text="🟢 Вернуть в зал", callback_data=f"admin:status:{sid}:open:{page}")
+    elif s["status"] == "hidden":
+        b.button(
+            text="↩️ Вернуть предыдущий статус",
+            callback_data=f"admin:status:{sid}:open:{page}",
+        )
     b.button(text="⬅️ К делам", callback_data=f"admin:cases:{page}")
     b.adjust(1)
     await safe_edit(message, text, b.as_markup())
@@ -2957,7 +2970,8 @@ async def help_callback(c: CallbackQuery, state: FSMContext):
         "🔥 Можно открыть популярные дела или найти те, где ещё нет советов.\n"
         "💬 <b>Советы</b> — отдельные рекомендации, которые влияют на репутацию.\n"
         "🗣 <b>Обсуждение</b> — вопросы, уточнения и ответы внутри каждого дела без фарма репутации.\n"
-        "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
+        "⚖️ <b>Мои дела</b> — твои публикации и управление ими.\n"
+        "✅ Завершённое дело остаётся читать, но новые советы и обсуждение закрываются.\n"
         "⭐ <b>Избранное</b> — сохраняй дела и получай важные обновления.\n"
         "••• Жалобы спрятаны во второстепенное меню, чтобы не перегружать карточки.\n"
         "🏆 <b>Рейтинг</b> учитывает репутацию и полезные оценки советов.\n"
@@ -3133,6 +3147,8 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🛡️ Команда: <b>{s['staff']}</b>\n"
         f"⚖️ Реальные дела: <b>{s['stories']}</b>\n"
         f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
+        f"✅ Завершённые: <b>{s['closed_stories']}</b>\n"
+        f"🗑 Удалённые: <b>{s['deleted_stories']}</b>\n"
         f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
         f"💬 Советы: <b>{s['comments']}</b>\n"
         f"🗣 Сообщения обсуждений: <b>{s['discussion_messages']}</b>\n"
