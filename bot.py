@@ -262,26 +262,40 @@ def feed_options(cat_key="all", sort="new"):
     return cat_key, sort, FEED_CATEGORIES[cat_key][1]
 
 
+def feed_case_status(story):
+    if story["is_demo"]:
+        return "🧪 Пример"
+    if story["comments_count"] == 0:
+        return "🆘 Нужны советы"
+    if story["discussion_count"] > 0:
+        return "🗣 Идёт обсуждение"
+    if story["comments_count"] >= 5:
+        return "🔥 Много мнений"
+    return "🟢 Открыто"
+
+
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
-    badge = "\n🧪 <i>Пример от Anon Verdict</i>" if story["is_demo"] else ""
 
     excerpt = str(story["body"]).strip()
-    if len(excerpt) > 320:
-        excerpt = excerpt[:320].rstrip() + "…"
+    if len(excerpt) > 280:
+        excerpt = excerpt[:280].rstrip() + "…"
 
     filter_label = FEED_CATEGORIES[cat_key][0]
     sort_label = FEED_SORTS[sort]
+    status = feed_case_status(story)
 
     return (
         "🏛️ <b>ЗАЛ СУДА</b>\n"
-        f"🏷️ {h(filter_label)} · {h(sort_label)}\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}"
-        f"{badge}\n\n"
+        f"<i>{h(filter_label)} · {h(sort_label)}</i>\n\n"
+        f"⚖️ <b>ДЕЛО №{story['id']}</b>\n"
+        f"{h(story['category'])} · {h(status)}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{h(excerpt)}\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']} · 🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
-        f"📄 {index + 1} из {total}"
+        "────────────\n"
+        f"👁 {story['views']}   💬 {story['comments_count']}   "
+        f"🗣 {story['discussion_count']}   ⭐ {story['favorites_count']}\n"
+        f"<i>{'Нужно мнение суда' if story['comments_count'] == 0 and not story['is_demo'] else 'Открой дело, чтобы посмотреть детали'}</i>"
     )
 
 
@@ -290,7 +304,7 @@ def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
     b = InlineKeyboardBuilder()
 
     b.button(
-        text="📖 Открыть дело",
+        text="📖 Читать дело",
         callback_data=f"case:{sid}:{index}:{cat_key}:{sort}",
     )
 
