@@ -2128,6 +2128,90 @@ async def favorite_toggle_callback(c: CallbackQuery):
     )
 
 
+@dp.callback_query(F.data.startswith("more:"))
+async def more_menu_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    if len(parts) < 3:
+        await c.answer("Некорректное меню", show_alert=True)
+        return
+
+    target_type = parts[1]
+    b = InlineKeyboardBuilder()
+
+    if target_type == "story":
+        try:
+            sid = int(parts[2])
+            feed_index = int(parts[3])
+        except (ValueError, IndexError):
+            await c.answer("Некорректное дело", show_alert=True)
+            return
+        back_to = parts[4] if len(parts) > 4 else "feed"
+        cat_key = parts[5] if len(parts) > 5 else "all"
+        sort = parts[6] if len(parts) > 6 else "new"
+
+        b.button(text="🚩 Пожаловаться", callback_data=f"report:story:{sid}")
+        b.button(
+            text="⬅️ К делу",
+            callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С ДЕЛОМ</b>"
+
+    elif target_type == "comment":
+        try:
+            cid = int(parts[2])
+            sid = int(parts[3])
+            index = int(parts[4])
+            feed_index = int(parts[5])
+        except (ValueError, IndexError):
+            await c.answer("Некорректный совет", show_alert=True)
+            return
+        cat_key = parts[6] if len(parts) > 6 else "all"
+        sort = parts[7] if len(parts) > 7 else "new"
+        back_to = parts[8] if len(parts) > 8 else "feed"
+
+        b.button(text="🚩 Пожаловаться", callback_data=f"report:comment:{cid}:{sid}")
+        b.button(
+            text="⬅️ К совету",
+            callback_data=f"comments:{sid}:{index}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С СОВЕТОМ</b>"
+
+    elif target_type == "discussion":
+        try:
+            message_id = int(parts[2])
+            sid = int(parts[3])
+            offset = int(parts[4])
+            feed_index = int(parts[5])
+        except (ValueError, IndexError):
+            await c.answer("Некорректное сообщение", show_alert=True)
+            return
+        cat_key = parts[6] if len(parts) > 6 else "all"
+        sort = parts[7] if len(parts) > 7 else "new"
+        back_to = parts[8] if len(parts) > 8 else "feed"
+
+        b.button(
+            text="🚩 Пожаловаться",
+            callback_data=f"report:discussion:{message_id}:{sid}",
+        )
+        b.button(
+            text="⬅️ К обсуждению",
+            callback_data=f"discuss:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
+        title = "••• <b>ДЕЙСТВИЯ С СООБЩЕНИЕМ</b>"
+    else:
+        await c.answer("Некорректное меню", show_alert=True)
+        return
+
+    b.adjust(1)
+    await safe_edit(
+        c.message,
+        title + "\n\nВторостепенные действия находятся здесь, чтобы не перегружать основной экран.",
+        b.as_markup(),
+    )
+    await c.answer()
+
+
 @dp.callback_query(F.data == "notifications:toggle")
 async def notifications_toggle_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -2190,7 +2274,7 @@ async def report_menu_callback(c: CallbackQuery):
     else:
         b.button(
             text="⬅️ К обсуждению",
-            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+            callback_data=f"discuss:{sid}:latest:0:all:new:feed",
         )
     b.adjust(1)
 
@@ -2277,9 +2361,9 @@ async def report_submit_callback(c: CallbackQuery):
             f"case:{sid}:0:all:new"
             if target_type == "story"
             else (
-                f"comments:{sid}:0:0:all:new"
+                f"comments:{sid}:0:0:all:new:feed"
                 if target_type == "comment"
-                else f"discuss:{sid}:0:0:all:new"
+                else f"discuss:{sid}:latest:0:all:new:feed"
             )
         ),
     )
