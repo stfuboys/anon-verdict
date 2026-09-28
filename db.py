@@ -107,6 +107,13 @@ class DB:
                   status TEXT DEFAULT 'open',
                   created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS story_views(
+                  user_id INTEGER NOT NULL,
+                  story_id INTEGER NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY(user_id, story_id)
+                );
                 """
             )
 
@@ -135,6 +142,8 @@ class DB:
                   ON favorites(story_id);
                 CREATE INDEX IF NOT EXISTS idx_reports_status
                   ON reports(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_story_views_story
+                  ON story_views(story_id);
                 """
             )
 
@@ -335,22 +344,45 @@ class DB:
             await db.commit()
             return cur.lastrowid
 
-    async def story(self, sid, view=False):
+    async def story(self, sid, view=False, viewer_tg_id=None):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            if view:
-                await db.execute(
-                    "UPDATE stories SET views=views+1 WHERE id=?",
-                    (sid,),
+
+            if view and viewer_tg_id is not None:
+                cur = await db.execute(
+                    """
+                    SELECT viewer.id, s.author_id
+                    FROM users viewer
+                    JOIN stories s ON s.id=?
+                    WHERE viewer.tg_id=?
+                    """,
+                    (sid, viewer_tg_id),
                 )
-                await db.commit()
+                view_row = await cur.fetchone()
+
+                if view_row and view_row["id"] != view_row["author_id"]:
+                    cur = await db.execute(
+                        """
+                        INSERT OR IGNORE INTO story_views(user_id, story_id, created_at)
+                        VALUES(?,?,?)
+                        """,
+                        (view_row["id"], sid, now()),
+                    )
+                    if cur.rowcount > 0:
+                        await db.execute(
+                            "UPDATE stories SET views=views+1 WHERE id=?",
+                            (sid,),
+                        )
+                    await db.commit()
+
             cur = await db.execute(
                 """
                 SELECT
                     s.*,
                     u.nickname,
                     u.tg_id AS author_tg_id,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -408,7 +440,8 @@ class DB:
                 SELECT
                     s.*,
                     u.nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE {where_sql}
@@ -439,7 +472,8 @@ class DB:
                 """
                 SELECT
                     s.*,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
+                    (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE u.tg_id=? AND s.is_demo=0
@@ -756,7 +790,8 @@ class DB:
                 SELECT
                     s.*,
                     u2.nickname,
-                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count
+                    (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
+                    (SELECT COUNT(*) FROM favorites f2 WHERE f2.story_id=s.id) AS favorites_count
                 FROM favorites f
                 JOIN users u ON u.id=f.user_id
                 JOIN stories s ON s.id=f.story_id
