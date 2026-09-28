@@ -303,7 +303,7 @@ async def body(m: Message, state: FSMContext):
         f"📜 <b>Дело №{sid} опубликовано анонимно.</b>\n\n"
         "Теперь его смогут увидеть в Зале суда.",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
@@ -460,7 +460,7 @@ async def comment(m: Message, state: FSMContext):
         f"🎖️ Текущее звание: <b>{h(u['title'])}</b>\n"
         f"⭐ Репутация: <b>{u['reputation']}</b>",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
@@ -537,7 +537,7 @@ async def bio(m: Message, state: FSMContext):
     d = await state.get_data()
     await db.update_profile(m.from_user.id, d["nick"], (text or "")[:160])
     await state.clear()
-    await m.answer("✅ Профиль обновлён.", reply_markup=main_keyboard())
+    await m.answer("✅ Профиль обновлён.", reply_markup=main_keyboard(m.from_user.id))
 
 
 def rating_text(rows):
@@ -613,7 +613,7 @@ async def menu_rating(m: Message):
     await m.answer(
         rating_text(rows),
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
@@ -663,7 +663,7 @@ async def menu_ranks(m: Message):
         "⭐ Один опубликованный совет сейчас даёт +2 репутации.\n"
         "🛡️ Роли команды Anon Verdict отображаются отдельно.",
         parse_mode="HTML",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(m.from_user.id),
     )
 
 
