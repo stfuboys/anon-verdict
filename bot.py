@@ -1658,9 +1658,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
     if not is_owner(m.from_user.id):
         remaining = await db.discussion_cooldown_remaining(m.from_user.id)
         if remaining:
-            await m.answer(
-                f"⏳ Слишком быстро. Подожди ещё {remaining} сек."
-            )
+            await m.answer(f"⏳ Подожди ещё {remaining} сек.")
             return
 
     data = await state.get_data()
@@ -1685,14 +1683,11 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     await state.clear()
 
-    total = await db.discussion_count(sid)
-    latest_index = max(0, total - 1)
-
     feed_index = data.get("discussion_feed_index", 0)
     cat_key = data.get("discussion_cat_key", "all")
     sort = data.get("discussion_sort", "new")
+    back_to = data.get("discussion_back_to", "feed")
 
-    # A direct reply is important enough for an immediate notification.
     reply_tg_id = result.get("reply_tg_id")
     if (
         reply_to
@@ -1703,7 +1698,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
         rb = InlineKeyboardBuilder()
         rb.button(
             text="🗣 Открыть обсуждение",
-            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+            callback_data=f"discuss:{sid}:latest:0:all:new:feed",
         )
         await safe_notify(
             reply_tg_id,
@@ -1714,7 +1709,6 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             rb.as_markup(),
         )
 
-    # Followers are notified only when the case author speaks.
     if result.get("is_story_author"):
         followers = await db.favorite_subscribers(
             sid,
@@ -1724,7 +1718,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             rb = InlineKeyboardBuilder()
             rb.button(
                 text="🗣 Открыть обсуждение",
-                callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
+                callback_data=f"discuss:{sid}:latest:0:all:new:feed",
             )
             asyncio.create_task(
                 notify_many(
@@ -1738,18 +1732,19 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     b = InlineKeyboardBuilder()
     b.button(
-        text="🗣 Открыть обсуждение",
-        callback_data=f"discuss:{sid}:{latest_index}:{feed_index}:{cat_key}:{sort}",
+        text="🗣 К обсуждению",
+        callback_data=f"discuss:{sid}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
     )
     b.button(
         text="⬅️ К делу",
-        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
     b.adjust(1)
 
     await m.answer(
-        "✅ Сообщение опубликовано в обсуждении.\n\n"
-        "Репутация за обычные сообщения обсуждения не начисляется.",
+        "✅ Сообщение опубликовано.\n"
+        "<i>Обсуждение не начисляет репутацию.</i>",
+        parse_mode="HTML",
         reply_markup=b.as_markup(),
     )
 
