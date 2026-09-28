@@ -2439,36 +2439,31 @@ async def help_callback(c: CallbackQuery):
 @dp.message(F.text == "🏛️ Зал суда")
 async def menu_feed(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("🏛️ Открываю Зал суда…", parse_mode="HTML")
-    await render_feed(msg, 0)
+    await render_feed(m, 0, edit=False)
 
 
 @dp.message(F.text == "👤 Мой профиль")
 async def menu_profile(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("👤 Открываю профиль…")
-    await render_profile(msg, m.from_user.id)
+    await render_profile(m, m.from_user.id, edit=False)
 
 
 @dp.message(F.text == "🏆 Рейтинг")
 async def menu_rating(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("🏆 Открываю рейтинг…")
-    await render_rating(msg, 0)
+    await render_rating(m, 0, edit=False)
 
 
 @dp.message(F.text == "⚖️ Мои дела")
 async def menu_my_cases(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("⚖️ Открываю твои дела…")
-    await render_my_cases(msg, m.from_user.id, 0)
+    await render_my_cases(m, m.from_user.id, 0, edit=False)
 
 
 @dp.message(F.text == "⭐ Избранное")
 async def menu_favorites(m: Message):
     await ensure_message_user(m)
-    msg = await m.answer("⭐ Открываю избранное…")
-    await render_favorites(msg, m.from_user.id, 0)
+    await render_favorites(m, m.from_user.id, 0, edit=False)
 
 
 @dp.message(F.text == "🎖️ Звания")
@@ -2539,14 +2534,7 @@ async def menu_new(m: Message, state: FSMContext):
 @dp.message(Command("profile"))
 async def profile_command(m: Message):
     await ensure_message_user(m)
-    u = await db.get_user(m.from_user.id)
-    await m.answer(
-        f"👤 <b>{h(u['nickname'])}</b>\n"
-        f"🎖️ {h(u['title'])}\n"
-        f"⭐ {u['reputation']}",
-        parse_mode="HTML",
-        reply_markup=main_keyboard(m.from_user.id),
-    )
+    await render_profile(m, m.from_user.id, edit=False)
 
 
 @dp.message(F.text == "🛡️ CEO Панель")
