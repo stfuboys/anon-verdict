@@ -137,6 +137,7 @@ class DB:
             await self._ensure_column(db, "users", "staff_role", "TEXT DEFAULT ''")
             await self._ensure_column(db, "users", "notifications_enabled", "INTEGER DEFAULT 1")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
+            await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
             await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
@@ -593,6 +594,7 @@ class DB:
 
             owner_tg_id, owner_notifications, story_title, _story_status = story_row
             return {
+                "status": "created",
                 "comment_id": comment_id,
                 "commenter_id": uid,
                 "commenter_tg_id": tg_id,
@@ -1453,12 +1455,36 @@ class DB:
             return {"status": "updated", "previous": current, "current": target_status}
 
     async def set_story_status(self, sid, status):
-        if status not in {"open", "closed", "deleted", "hidden"}:
-            raise ValueError("Unsupported story status")
+        if status not in {"open", "hidden"}:
+            raise ValueError("Unsupported moderation story status")
+
         async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute(
-                "UPDATE stories SET status=? WHERE id=? AND is_demo=0",
-                (status, sid),
-            )
+            if status == "hidden":
+                cur = await db.execute(
+                    """
+                    UPDATE stories
+                    SET status_before_hidden=CASE
+                          WHEN status!='hidden' THEN status
+                          ELSE status_before_hidden
+                        END,
+                        status='hidden'
+                    WHERE id=? AND is_demo=0
+                    """,
+                    (sid,),
+                )
+            else:
+                cur = await db.execute(
+                    """
+                    UPDATE stories
+                    SET status=CASE
+                          WHEN status='hidden'
+                            THEN COALESCE(NULLIF(status_before_hidden, ''), 'open')
+                          ELSE status
+                        END,
+                        status_before_hidden=''
+                    WHERE id=? AND is_demo=0
+                    """,
+                    (sid,),
+                )
             await db.commit()
             return cur.rowcount > 0
