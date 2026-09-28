@@ -912,16 +912,18 @@ def discussion_window_keyboard(
     cat_key="all",
     sort="new",
     back_to="feed",
+    allow_write=True,
 ):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
     for pos, item in enumerate(rows):
         mark = DISCUSSION_MARKS[pos]
-        b.button(
-            text=f"↩️ {mark}",
-            callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
-        )
+        if allow_write:
+            b.button(
+                text=f"↩️ {mark}",
+                callback_data=f"dreply:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+            )
         b.button(
             text=f"👍 {mark} {item['likes']}",
             callback_data=f"dlike:{item['id']}:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -944,19 +946,22 @@ def discussion_window_keyboard(
             callback_data=f"discuss:{sid}:{newer_offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    b.button(
-        text="✍️ Написать",
-        callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
-    )
+    if allow_write:
+        b.button(
+            text="✍️ Написать",
+            callback_data=f"dwrite:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+        )
     b.button(
         text="⬅️ К делу",
         callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
     )
 
-    rows_layout = [3] * len(rows)
+    rows_layout = [3 if allow_write else 2] * len(rows)
     if offset > 0 or newer_offset < total:
         rows_layout.append(2 if offset > 0 and newer_offset < total else 1)
-    rows_layout.extend([1, 1])
+    if allow_write:
+        rows_layout.append(1)
+    rows_layout.append(1)
     b.adjust(*rows_layout)
     return b.as_markup()
 
@@ -971,7 +976,7 @@ async def render_discussion(
     back_to="feed",
 ):
     story = await db.story(sid)
-    if not story or story["is_demo"]:
+    if not story or story["is_demo"] or story["status"] in {"hidden", "deleted"}:
         await safe_edit(
             message,
             "🗣 <b>ОБСУЖДЕНИЕ</b>\n\nДля этого дела обсуждение недоступно.",
@@ -979,22 +984,28 @@ async def render_discussion(
         )
         return
 
+    allow_write = story["status"] == "open"
     total = await db.discussion_count(sid)
     if total == 0:
         b = InlineKeyboardBuilder()
-        b.button(
-            text="✍️ Начать обсуждение",
-            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
-        )
+        if allow_write:
+            b.button(
+                text="✍️ Начать обсуждение",
+                callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
+            )
         b.button(
             text="⬅️ К делу",
             callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         b.adjust(1)
+        empty_text = (
+            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации."
+            if allow_write
+            else "Дело завершено. Новые сообщения закрыты, а обсуждение пока пустое."
+        )
         await safe_edit(
             message,
-            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
-            "Пока здесь тихо. Задай вопрос автору или начни обсуждение ситуации.",
+            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n" + empty_text,
             b.as_markup(),
         )
         return
@@ -1006,9 +1017,13 @@ async def render_discussion(
         offset = max_offset
         rows = await db.discussion_page(sid, offset, DISCUSSION_PAGE_SIZE)
 
+    text = discussion_window_text(rows, offset, total)
+    if not allow_write:
+        text += "\n\n✅ <i>Дело завершено — обсуждение доступно только для чтения.</i>"
+
     await safe_edit(
         message,
-        discussion_window_text(rows, offset, total),
+        text,
         discussion_window_keyboard(
             rows,
             sid,
@@ -1018,6 +1033,7 @@ async def render_discussion(
             cat_key,
             sort,
             back_to,
+            allow_write=allow_write,
         ),
     )
 
