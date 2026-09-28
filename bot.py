@@ -98,6 +98,10 @@ class Comment(StatesGroup):
     body = State()
 
 
+class Discussion(StatesGroup):
+    body = State()
+
+
 class Admin(StatesGroup):
     user_lookup = State()
 
@@ -406,7 +410,8 @@ def case_text(story):
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
         f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']} · ⭐ Сохранений: {story['favorites_count']}"
+        f"💬 Советов: {story['comments_count']} · 🗣 Обсуждение: {story['discussion_count']}\n"
+        f"⭐ Сохранений: {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -433,6 +438,12 @@ def case_keyboard(
         b.button(
             text=f"💬 Советы ({story['comments_count']})",
             callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
+        )
+
+    if not story["is_demo"]:
+        b.button(
+            text=f"🗣 Обсуждение ({story['discussion_count']})",
+            callback_data=f"discuss:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
         )
 
     b.button(
@@ -592,6 +603,127 @@ async def render_comments(
             cat_key,
             sort,
         ),
+    )
+
+
+def discussion_text(item, index, total):
+    is_author = item["author_id"] == item["story_author_id"]
+    author_label = "👑 Автор" if is_author else h(item["nickname"])
+
+    staff = ""
+    if item["staff_role"] and item["staff_role"] != "SYSTEM":
+        staff = f" · 🛡️ {h(item['staff_role'])}"
+
+    reply_block = ""
+    if item["reply_to_id"] and item["reply_body"]:
+        reply_author = h(item["reply_nickname"] or "участнику")
+        quote = str(item["reply_body"]).strip().replace("\n", " ")
+        if len(quote) > 140:
+            quote = quote[:140].rstrip() + "…"
+        reply_block = (
+            f"\n↩️ <i>Ответ {reply_author}: {h(quote)}</i>\n"
+        )
+
+    return (
+        "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
+        f"<b>{author_label}</b>{staff}"
+        f"{reply_block}\n"
+        f"{h(item['body'])}\n\n"
+        f"👍 {item['likes']} · 📄 {index + 1} из {total}"
+    )
+
+
+def discussion_keyboard(item, sid, index, total, feed_index, cat_key="all", sort="new"):
+    cat_key, sort, _ = feed_options(cat_key, sort)
+    b = InlineKeyboardBuilder()
+
+    b.button(
+        text=f"👍 {item['likes']}",
+        callback_data=f"dlike:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="↩️ Ответить",
+        callback_data=f"dreply:{item['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="🚩 Жалоба",
+        callback_data=f"report:discussion:{item['id']}:{sid}",
+    )
+
+    if total > 1:
+        prev_i = (index - 1) % total
+        next_i = (index + 1) % total
+        nav_row(
+            b,
+            f"discuss:{sid}:{prev_i}:{feed_index}:{cat_key}:{sort}",
+            f"{index + 1}/{total}",
+            f"discuss:{sid}:{next_i}:{feed_index}:{cat_key}:{sort}",
+        )
+
+    b.button(
+        text="✍️ Написать",
+        callback_data=f"dwrite:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+    )
+
+    if total > 1:
+        b.adjust(2, 1, 3, 1, 1)
+    else:
+        b.adjust(2, 1, 1, 1)
+    return b.as_markup()
+
+
+async def render_discussion(
+    message,
+    sid,
+    index=0,
+    feed_index=0,
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if not story or story["is_demo"]:
+        await safe_edit(
+            message,
+            "🗣 <b>ОБСУЖДЕНИЕ</b>\n\nДля этого дела обсуждение недоступно.",
+            home_inline(message.chat.id),
+        )
+        return
+
+    total = await db.discussion_count(sid)
+    if total == 0:
+        b = InlineKeyboardBuilder()
+        b.button(
+            text="✍️ Начать обсуждение",
+            callback_data=f"dwrite:{sid}:0:{feed_index}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="⬅️ К делу",
+            callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
+        )
+        b.adjust(1)
+        await safe_edit(
+            message,
+            "🗣 <b>ОБСУЖДЕНИЕ ДЕЛА</b>\n\n"
+            "Пока здесь тихо.\n"
+            "Можно задать вопрос автору, уточнить детали или обсудить ситуацию с другими.",
+            b.as_markup(),
+        )
+        return
+
+    index = clamp(index, 0, total - 1)
+    item = await db.discussion_item(sid, index)
+    if not item:
+        index = max(0, total - 1)
+        item = await db.discussion_item(sid, index)
+
+    await safe_edit(
+        message,
+        discussion_text(item, index, total),
+        discussion_keyboard(item, sid, index, total, feed_index, cat_key, sort),
     )
 
 
