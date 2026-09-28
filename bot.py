@@ -69,6 +69,17 @@ db = DB(
     staff_roles=staff_roles,
 )
 
+PRIMARY_NAV_TEXTS = {
+    "📝 Подать дело",
+    "🏛️ Зал суда",
+    "👤 Мой профиль",
+    "🏆 Рейтинг",
+    "⚖️ Мои дела",
+    "⭐ Избранное",
+    "🛡️ CEO Панель",
+}
+
+
 CATS = [
     "❤️ Отношения",
     "💼 Работа",
@@ -1350,7 +1361,8 @@ async def body(m: Message, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("feed:"))
-async def feed_callback(c: CallbackQuery):
+async def feed_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1364,7 +1376,8 @@ async def feed_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("feedcat:"))
-async def feed_category_callback(c: CallbackQuery):
+async def feed_category_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     cat_key = parts[1] if len(parts) > 1 else "all"
@@ -1374,7 +1387,8 @@ async def feed_category_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("feedsort:"))
-async def feed_sort_callback(c: CallbackQuery):
+async def feed_sort_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     cat_key = parts[1] if len(parts) > 1 else "all"
@@ -1384,7 +1398,8 @@ async def feed_sort_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("random:"))
-async def random_case_callback(c: CallbackQuery):
+async def random_case_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1414,7 +1429,8 @@ async def random_case_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("case:"))
-async def case_callback(c: CallbackQuery):
+async def case_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1438,7 +1454,8 @@ async def case_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("caseback:"))
-async def case_back_callback(c: CallbackQuery):
+async def case_back_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1465,7 +1482,8 @@ async def case_back_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("mycase:"))
-async def mycase_callback(c: CallbackQuery):
+async def mycase_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     try:
         _, sid, index = c.data.split(":")
@@ -1475,6 +1493,19 @@ async def mycase_callback(c: CallbackQuery):
         return
     await render_case(c.message, sid, index, "my", count_view=False)
     await c.answer()
+
+
+@dp.callback_query(F.data == "cancelinput")
+async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    b = InlineKeyboardBuilder()
+    b.button(text="🏛️ В Зал суда", callback_data="feed:0")
+    await safe_edit(
+        c.message,
+        "❌ <b>Ввод отменён.</b>",
+        b.as_markup(),
+    )
+    await c.answer("Ввод отменён")
 
 
 @dp.callback_query(F.data.startswith("discuss:"))
@@ -1554,10 +1585,13 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
         discussion_reply_to=None,
     )
     await state.set_state(Discussion.body)
+    cancel = InlineKeyboardBuilder()
+    cancel.button(text="❌ Отменить", callback_data="cancelinput")
     await c.message.answer(
         "🗣 <b>Новое сообщение</b>\n\n"
         "Напиши вопрос, уточнение или мнение.",
         parse_mode="HTML",
+        reply_markup=cancel.as_markup(),
     )
     await c.answer()
 
@@ -1607,11 +1641,14 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
         discussion_reply_to=message_id,
     )
     await state.set_state(Discussion.body)
+    cancel = InlineKeyboardBuilder()
+    cancel.button(text="❌ Отменить", callback_data="cancelinput")
     await c.message.answer(
         "↩️ <b>Ответ на сообщение</b>\n"
         f"<i>{h(quote)}</i>\n\n"
         "Напиши ответ:",
         parse_mode="HTML",
+        reply_markup=cancel.as_markup(),
     )
     await c.answer()
 
@@ -1656,6 +1693,10 @@ async def discussion_like_callback(c: CallbackQuery):
 @dp.message(Discussion.body)
 async def discussion_message_submit(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     text = text.strip()
 
@@ -1761,7 +1802,8 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("comments:"))
-async def comments_callback(c: CallbackQuery):
+async def comments_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1892,10 +1934,13 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
         back_to=back_to,
     )
     await state.set_state(Comment.body)
+    cancel = InlineKeyboardBuilder()
+    cancel.button(text="❌ Отменить", callback_data="cancelinput")
     await c.message.answer(
         "💬 <b>Твой совет</b>\n\n"
         "Напиши конкретно, что бы ты сделал на месте автора и почему.",
         parse_mode="HTML",
+        reply_markup=cancel.as_markup(),
     )
     await c.answer()
 
@@ -1903,6 +1948,10 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
 @dp.message(Comment.body)
 async def comment(m: Message, state: FSMContext):
     await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
     text, reasons = moderate(m.text or "")
     text = text.strip()
     if not text:
@@ -2025,7 +2074,8 @@ async def ai_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data == "profile")
-async def profile_callback(c: CallbackQuery):
+async def profile_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     await render_profile(c.message, c.from_user.id)
     await c.answer()
@@ -2071,7 +2121,8 @@ async def bio(m: Message, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("my:"))
-async def my_cases_callback(c: CallbackQuery):
+async def my_cases_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     try:
         index = int(c.data.split(":")[1])
@@ -2082,7 +2133,8 @@ async def my_cases_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("favorites:"))
-async def favorites_callback(c: CallbackQuery):
+async def favorites_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     try:
         index = int(c.data.split(":")[1])
@@ -2093,7 +2145,8 @@ async def favorites_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("favcase:"))
-async def favorite_case_callback(c: CallbackQuery):
+async def favorite_case_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     try:
         _, sid, index = c.data.split(":")
@@ -2144,8 +2197,9 @@ async def favorite_toggle_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("more:"))
-async def more_menu_callback(c: CallbackQuery):
+async def more_menu_callback(c: CallbackQuery, state: FSMContext):
     await ensure_callback_user(c)
+    await state.clear()
     parts = c.data.split(":")
     if len(parts) < 3:
         await c.answer("Некорректное меню", show_alert=True)
@@ -2396,7 +2450,8 @@ async def report_submit_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data.startswith("rating:"))
-async def rating_callback(c: CallbackQuery):
+async def rating_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     try:
         page = int(c.data.split(":")[1])
@@ -2407,7 +2462,8 @@ async def rating_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data == "ranks")
-async def ranks_callback(c: CallbackQuery):
+async def ranks_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ В профиль", callback_data="profile")
@@ -2430,7 +2486,8 @@ async def ranks_callback(c: CallbackQuery):
 
 
 @dp.callback_query(F.data == "help")
-async def help_callback(c: CallbackQuery):
+async def help_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ В профиль", callback_data="profile")
@@ -2453,6 +2510,33 @@ async def help_callback(c: CallbackQuery):
         b.as_markup(),
     )
     await c.answer()
+
+
+async def route_primary_navigation(m: Message):
+    text = m.text or ""
+    if text == "🏛️ Зал суда":
+        await render_feed(m, 0, edit=False)
+    elif text == "👤 Мой профиль":
+        await render_profile(m, m.from_user.id, edit=False)
+    elif text == "🏆 Рейтинг":
+        await render_rating(m, 0, edit=False)
+    elif text == "⚖️ Мои дела":
+        await render_my_cases(m, m.from_user.id, 0, edit=False)
+    elif text == "⭐ Избранное":
+        await render_favorites(m, m.from_user.id, 0, edit=False)
+    elif text == "🛡️ CEO Панель":
+        if is_owner(m.from_user.id):
+            await render_admin_home(m, edit=False)
+    elif text == "📝 Подать дело":
+        b = InlineKeyboardBuilder()
+        for x in CATS:
+            b.button(text=x, callback_data="cat:" + x)
+        b.adjust(2)
+        await m.answer(
+            "📝 <b>НОВОЕ ДЕЛО</b>\n\nВыбери категорию:",
+            parse_mode="HTML",
+            reply_markup=b.as_markup(),
+        )
 
 
 @dp.message(F.text == "🏛️ Зал суда")
