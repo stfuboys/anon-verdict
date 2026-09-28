@@ -740,13 +740,15 @@ class DB:
                     u.tg_id AS author_tg_id,
                     s.author_id AS story_author_id,
                     parent.body AS reply_body,
+                    parent.author_id AS reply_author_id,
                     parent_u.nickname AS reply_nickname,
                     (SELECT COUNT(*) FROM discussion_reactions r
                      WHERE r.message_id=d.id AND r.value=1) AS likes
                 FROM discussion_messages d
                 JOIN users u ON u.id=d.author_id
                 JOIN stories s ON s.id=d.story_id
-                LEFT JOIN discussion_messages parent ON parent.id=d.reply_to_id
+                LEFT JOIN discussion_messages parent
+                  ON parent.id=d.reply_to_id AND parent.status='open'
                 LEFT JOIN users parent_u ON parent_u.id=parent.author_id
                 WHERE d.story_id=? AND d.status='open'
                 ORDER BY d.created_at ASC, d.id ASC
