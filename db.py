@@ -406,6 +406,7 @@ class DB:
                     FROM users viewer
                     JOIN stories s ON s.id=?
                     WHERE viewer.tg_id=?
+                      AND s.status IN ('open','closed')
                     """,
                     (sid, viewer_tg_id),
                 )
@@ -1330,7 +1331,7 @@ class DB:
                 """
                 SELECT
                     u.*,
-                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
                 FROM users u
                 WHERE u.tg_id != 0
@@ -1348,7 +1349,7 @@ class DB:
                 """
                 SELECT
                     u.*,
-                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0) AS stories_count,
+                    (SELECT COUNT(*) FROM stories s WHERE s.author_id=u.id AND s.is_demo=0 AND s.status!='deleted') AS stories_count,
                     (SELECT COUNT(*) FROM comments c WHERE c.author_id=u.id) AS comments_count
                 FROM users u
                 WHERE u.tg_id=?
