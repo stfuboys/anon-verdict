@@ -130,6 +130,14 @@ def clamp(value, low, high):
     return max(low, min(value, high))
 
 
+def back_to_code(back_to):
+    return {"feed": "f", "my": "m", "favorites": "v"}.get(back_to, "f")
+
+
+def back_to_from_code(code):
+    return {"f": "feed", "m": "my", "v": "favorites"}.get(code, "feed")
+
+
 def is_owner(user_id):
     return owner_id is not None and user_id is not None and int(user_id) == owner_id
 
@@ -556,12 +564,14 @@ def case_text(story):
         )
         content = reopen_prefix + h(body)
 
+    best_note = "🏆 Лучший ответ выбран автором\n\n" if story["best_comment_id"] else ""
+
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
         f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{content}\n\n"
-        f"{'🏆 Лучший ответ выбран автором\n\n' if story['best_comment_id'] else ''}"
+        f"{best_note}"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -822,6 +832,95 @@ async def render_case_management(
     )
 
 
+async def render_best_answer_picker(
+    message,
+    user_id,
+    sid,
+    index=0,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+        or story["status"] != "open"
+    ):
+        await safe_edit(message, "Выбор лучшего ответа недоступен.", home_inline(user_id))
+        return
+
+    total = await db.comment_count(sid)
+    if total == 0:
+        b = InlineKeyboardBuilder()
+        b.button(
+            text="✅ Да, завершить",
+            callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="⬅️ Не завершать",
+            callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.adjust(1)
+        await safe_edit(
+            message,
+            "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>\n\n"
+            "Ответов пока нет, поэтому выбирать лучший нечего.\n"
+            "После завершения новые советы и сообщения обсуждения будут закрыты.",
+            b.as_markup(),
+        )
+        return
+
+    index = clamp(index, 0, total - 1)
+    comment = await db.comment_item(sid, index)
+    if not comment:
+        await safe_edit(message, "Ответ не найден.", home_inline(user_id))
+        return
+
+    role = ""
+    if comment["staff_role"] and comment["staff_role"] != "SYSTEM":
+        role = f" · 🛡️ {h(comment['staff_role'])}"
+
+    back_code = back_to_code(back_to)
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="🏆 Выбрать этот ответ",
+        callback_data=f"bc:{comment['id']}:{sid}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+
+    prev_i = (index - 1) % total
+    next_i = (index + 1) % total
+    nav_row(
+        b,
+        f"bp:{sid}:{prev_i}:{feed_index}:{back_code}:{cat_key}:{sort}",
+        f"{index + 1}/{total}",
+        f"bp:{sid}:{next_i}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+
+    b.button(
+        text="✅ Завершить без выбора",
+        callback_data=f"bn:{sid}:{feed_index}:{back_code}:{cat_key}:{sort}",
+    )
+    b.button(
+        text="⬅️ Не завершать",
+        callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1, 3, 1, 1)
+
+    await safe_edit(
+        message,
+        "🏆 <b>ВЫБЕРИ ЛУЧШИЙ ОТВЕТ</b>\n\n"
+        "Перед завершением можешь отметить совет, который оказался самым полезным.\n\n"
+        f"<b>{h(comment['nickname'])}</b> · {h(comment['title'])}{role}\n\n"
+        f"{h(comment['body'])}\n\n"
+        f"👍 {comment['likes']} · 👎 {comment['dislikes']}\n"
+        f"📄 {index + 1} из {total}",
+        b.as_markup(),
+    )
+
+
 async def render_lifecycle_confirmation(
     message,
     user_id,
@@ -848,15 +947,26 @@ async def render_lifecycle_confirmation(
                 message, user_id, sid, feed_index, back_to, cat_key, sort
             )
             return
+        if await db.comment_count(sid) > 0:
+            await render_best_answer_picker(
+                message,
+                user_id,
+                sid,
+                0,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+            )
+            return
         b.button(
             text="✅ Да, завершить",
             callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
         title = "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>"
         body = (
-            "Оно исчезнет из активного Зала суда.\n"
-            "Новые советы и сообщения обсуждения будут закрыты.\n"
-            "Старые ответы останутся доступными для чтения.\n\n"
+            "Ответов пока нет. После завершения дело исчезнет из активного Зала суда.\n"
+            "Новые советы и сообщения обсуждения будут закрыты.\n\n"
             "Позже дело можно будет возобновить."
         )
     elif action == "d":
