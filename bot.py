@@ -385,32 +385,58 @@ def case_text(story):
     )
 
 
-def case_keyboard(story, feed_index=0, back_to="feed", cat_key="all", sort="new"):
+def case_keyboard(
+    story,
+    feed_index=0,
+    back_to="feed",
+    cat_key="all",
+    sort="new",
+    favorite=False,
+    own_story=False,
+):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
+
     if not story["is_demo"]:
         b.button(
             text="💬 Дать совет",
             callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}",
         )
+
     if story["comments_count"]:
         b.button(
             text=f"💬 Советы ({story['comments_count']})",
             callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}",
         )
+
     b.button(
         text="🧠 Разбор",
         callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}",
     )
+
+    b.button(
+        text="✅ В избранном" if favorite else "⭐ В избранное",
+        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+
+    if not story["is_demo"] and not own_story:
+        b.button(
+            text="🚩 Пожаловаться",
+            callback_data=f"report:story:{story['id']}",
+        )
+
     if back_to == "my":
         b.button(text="⬅️ К моим делам", callback_data=f"my:{feed_index}")
+    elif back_to == "favorites":
+        b.button(text="⬅️ К избранному", callback_data=f"favorites:{feed_index}")
     else:
         b.button(
             text="⬅️ В зал суда",
             callback_data=f"feed:{feed_index}:{cat_key}:{sort}",
         )
+
     b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 1, 1, 1)
+    b.adjust(2, 2, 1, 1, 1)
     return b.as_markup()
 
 
@@ -428,13 +454,26 @@ async def render_case(
         await safe_edit(
             message,
             "Дело не найдено.",
-            home_inline(),
+            home_inline(message.chat.id),
         )
         return
+
+    viewer_id = message.chat.id
+    favorite = await db.favorite_state(viewer_id, sid)
+    own_story = int(story["author_tg_id"]) == int(viewer_id)
+
     await safe_edit(
         message,
         case_text(story),
-        case_keyboard(story, feed_index, back_to, cat_key, sort),
+        case_keyboard(
+            story,
+            feed_index,
+            back_to,
+            cat_key,
+            sort,
+            favorite=favorite,
+            own_story=own_story,
+        ),
     )
 
 
