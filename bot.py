@@ -739,21 +739,128 @@ async def render_rating(message, page=0):
 def admin_menu():
     b = InlineKeyboardBuilder()
     b.button(text="📊 Статистика", callback_data="admin:stats")
+    b.button(text="🚩 Жалобы", callback_data="admin:reports:0")
     b.button(text="👥 Пользователи", callback_data="admin:users:0")
     b.button(text="🔎 Найти по ID", callback_data="admin:find")
     b.button(text="⚖️ Дела", callback_data="admin:cases:0")
     b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 1, 1, 1)
+    b.adjust(2, 1, 1, 1, 1)
     return b.as_markup()
 
 
 async def render_admin_home(message):
+    reports = await db.admin_report_count()
     await safe_edit(
         message,
         "🛡️ <b>CEO ANON VERDICT</b>\n\n"
-        "Управление проектом: статистика, пользователи, роли и модерация дел.",
+        "Управление проектом: статистика, пользователи, роли и модерация.\n\n"
+        f"🚩 Открытых жалоб: <b>{reports}</b>",
         admin_menu(),
     )
+
+
+async def render_admin_reports(message, page=0):
+    total = await db.admin_report_count()
+    if total == 0:
+        await safe_edit(
+            message,
+            "🚩 <b>ЖАЛОБЫ</b>\n\nОткрытых жалоб нет.",
+            admin_menu(),
+        )
+        return
+
+    pages = max(1, (total + ADMIN_PAGE_SIZE - 1) // ADMIN_PAGE_SIZE)
+    page = clamp(page, 0, pages - 1)
+    rows = await db.admin_reports_page(page * ADMIN_PAGE_SIZE, ADMIN_PAGE_SIZE)
+
+    b = InlineKeyboardBuilder()
+    for report in rows:
+        icon = "⚖️" if report["target_type"] == "story" else "💬"
+        reason = str(report["reason"])[:22]
+        b.button(
+            text=f"🚩 #{report['id']} · {icon} {report['target_id']} · {reason}",
+            callback_data=f"admin:report:{report['id']}:{page}",
+        )
+
+    if pages > 1:
+        prev_p = (page - 1) % pages
+        next_p = (page + 1) % pages
+        nav_row(
+            b,
+            f"admin:reports:{prev_p}",
+            f"{page + 1}/{pages}",
+            f"admin:reports:{next_p}",
+        )
+
+    b.button(text="⬅️ CEO Панель", callback_data="admin:home")
+    b.adjust(*([1] * len(rows)), 3 if pages > 1 else 1, 1)
+
+    await safe_edit(
+        message,
+        "🚩 <b>ОЧЕРЕДЬ ЖАЛОБ</b>\n\n"
+        "Сначала идут самые старые необработанные жалобы.",
+        b.as_markup(),
+    )
+
+
+async def render_admin_report(message, report_id, page=0):
+    report = await db.admin_report(report_id)
+    if not report or report["status"] != "open":
+        await render_admin_reports(message, page)
+        return
+
+    target_type = report["target_type"]
+    target_id = report["target_id"]
+
+    if target_type == "story":
+        target = await db.admin_story(target_id)
+        if target:
+            preview = (
+                f"⚖️ <b>Дело №{target_id}</b>\n"
+                f"Статус: <b>{h(target['status'])}</b>\n"
+                f"Автор: {h(target['author_nickname'])} · "
+                f"<code>{target['author_tg_id']}</code>\n\n"
+                f"<b>{h(target['title'])}</b>\n"
+                f"{h(target['body'][:1000])}"
+            )
+        else:
+            preview = f"⚖️ Дело №{target_id} не найдено."
+    else:
+        target = await db.admin_comment(target_id)
+        if target:
+            preview = (
+                f"💬 <b>Совет №{target_id}</b>\n"
+                f"Статус: <b>{h(target['status'])}</b>\n"
+                f"Автор: {h(target['author_nickname'])} · "
+                f"<code>{target['author_tg_id']}</code>\n"
+                f"К делу: {h(target['story_title'])}\n\n"
+                f"{h(target['body'][:1200])}"
+            )
+        else:
+            preview = f"💬 Совет №{target_id} не найден."
+
+    text = (
+        f"🚩 <b>ЖАЛОБА №{report_id}</b>\n\n"
+        f"Причина: <b>{h(report['reason'])}</b>\n"
+        f"От: {h(report['reporter_nickname'])} · "
+        f"<code>{report['reporter_tg_id']}</code>\n\n"
+        f"{preview}"
+    )
+
+    b = InlineKeyboardBuilder()
+    if target:
+        b.button(
+            text="🙈 Скрыть и закрыть",
+            callback_data=f"admin:reportact:{report_id}:hide:{page}",
+        )
+    b.button(
+        text="✅ Отклонить жалобу",
+        callback_data=f"admin:reportact:{report_id}:dismiss:{page}",
+    )
+    b.button(text="⬅️ К жалобам", callback_data=f"admin:reports:{page}")
+    b.adjust(1)
+
+    await safe_edit(message, text, b.as_markup())
 
 
 async def render_admin_users(message, page=0):
@@ -1778,7 +1885,9 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
         f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
         f"💬 Советы: <b>{s['comments']}</b>\n"
-        f"👍👎 Реакции: <b>{s['reactions']}</b>",
+        f"👍👎 Реакции: <b>{s['reactions']}</b>\n"
+        f"⭐ Сохранений: <b>{s['favorites']}</b>\n"
+        f"🚩 Открытых жалоб: <b>{s['reports']}</b>",
         b.as_markup(),
     )
     await c.answer()
