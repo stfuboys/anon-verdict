@@ -157,13 +157,10 @@ def home_text(user=None):
         role_text = f"\n🛡️ Роль: <b>{h(user['staff_role'])}</b>"
     return (
         "⚖️ <b>ANON VERDICT</b>\n\n"
-        "Анонимный зал жизненных ситуаций.\n"
-        "Рассказывай о том, что происходит, получай мнения со стороны "
-        "и помогай другим своими советами.\n\n"
+        "Анонимно расскажи ситуацию, обсуди её и получи советы со стороны.\n\n"
         "🔒 Автор дела скрыт от других пользователей.\n"
-        "⭐ За полезную активность растёт репутация."
-        f"{role_text}\n\n"
-        "Быстрые кнопки снизу остаются — ими удобно мгновенно открывать нужный раздел."
+        "⭐ Полезные советы повышают репутацию."
+        f"{role_text}"
     )
 
 
@@ -420,9 +417,8 @@ def case_text(story):
         f"🏷️ {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
-        f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']} · 🗣 Обсуждение: {story['discussion_count']}\n"
-        f"⭐ Сохранений: {story['favorites_count']}"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · "
+        f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -2311,8 +2307,7 @@ async def rating_callback(c: CallbackQuery):
 async def ranks_callback(c: CallbackQuery):
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Профиль", callback_data="profile")
-    b.button(text="🏠 Главное меню", callback_data="home")
+    b.button(text="⬅️ В профиль", callback_data="profile")
     b.adjust(1)
     await safe_edit(
         c.message,
@@ -2322,7 +2317,7 @@ async def ranks_callback(c: CallbackQuery):
         "⚖️ Судья — 30+\n"
         "🏛️ Старший судья — 75+\n"
         "👑 Верховный судья — 150+\n\n"
-        "⭐ Опубликованный совет даёт +2 репутации.\n"
+        "⭐ Первый совет к каждому чужому делу даёт +2 репутации.\n"
         "👍 Каждый уникальный лайк от другого пользователя даёт автору совета ещё +1.\n"
         "👎 Дизлайк сам по себе репутацию не отнимает.\n"
         "🛡️ Роли команды Anon Verdict существуют отдельно от судебных званий.",
@@ -2335,7 +2330,7 @@ async def ranks_callback(c: CallbackQuery):
 async def help_callback(c: CallbackQuery):
     await ensure_callback_user(c)
     b = InlineKeyboardBuilder()
-    b.button(text="🏠 Главное меню", callback_data="home")
+    b.button(text="⬅️ В профиль", callback_data="profile")
     await safe_edit(
         c.message,
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
@@ -2346,8 +2341,8 @@ async def help_callback(c: CallbackQuery):
         "💬 <b>Советы</b> — отдельные рекомендации, которые влияют на репутацию.\n"
         "🗣 <b>Обсуждение</b> — вопросы, уточнения и ответы внутри каждого дела без фарма репутации.\n"
         "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
-        "⭐ <b>Избранное</b> — сохраняй дела и получай уведомления о новых советах.\n"
-        "🚩 На неподходящее дело или совет можно отправить жалобу.\n"
+        "⭐ <b>Избранное</b> — сохраняй дела и получай важные обновления.\n"
+        "••• Жалобы спрятаны во второстепенное меню, чтобы не перегружать карточки.\n"
         "🏆 <b>Рейтинг</b> учитывает репутацию и полезные оценки советов.\n"
         "⭐ Первый совет к делу даёт +2 репутации, каждый уникальный 👍 — ещё +1.\n"
         "⏳ Антиспам ограничивает слишком частые публикации.\n\n"
