@@ -163,6 +163,7 @@ class DB:
             await self._ensure_column(db, "users", "notifications_enabled", "INTEGER DEFAULT 1")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
             await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "stories", "reopened_at", "TEXT DEFAULT ''")
             await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
@@ -535,7 +536,10 @@ class DB:
                     u.tg_id AS author_tg_id,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
                     (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
-                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count,
+                    (SELECT COUNT(*) FROM story_updates su WHERE su.story_id=s.id) AS update_count,
+                    (SELECT su.body FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_body,
+                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE s.id=?
@@ -569,7 +573,16 @@ class DB:
         else:
             order_sql = """
                 s.is_demo ASC,
-                CASE WHEN s.is_demo=0 THEN s.created_at END DESC,
+                CASE WHEN s.is_demo=0 THEN
+                    MAX(
+                        s.created_at,
+                        COALESCE(NULLIF(s.reopened_at, ''), s.created_at),
+                        COALESCE(
+                            (SELECT MAX(su.created_at) FROM story_updates su WHERE su.story_id=s.id),
+                            s.created_at
+                        )
+                    )
+                END DESC,
                 CASE WHEN s.is_demo=1 THEN s.id END ASC
             """
 
@@ -595,7 +608,10 @@ class DB:
                     u.nickname,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
                     (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
-                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count,
+                    (SELECT COUNT(*) FROM story_updates su WHERE su.story_id=s.id) AS update_count,
+                    (SELECT su.body FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_body,
+                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE {where_sql}
@@ -628,7 +644,10 @@ class DB:
                     s.*,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
                     (SELECT COUNT(*) FROM favorites f WHERE f.story_id=s.id) AS favorites_count,
-                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count,
+                    (SELECT COUNT(*) FROM story_updates su WHERE su.story_id=s.id) AS update_count,
+                    (SELECT su.body FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_body,
+                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
                 WHERE u.tg_id=? AND s.is_demo=0 AND s.status!='deleted'
@@ -1314,7 +1333,10 @@ class DB:
                     u2.nickname,
                     (SELECT COUNT(*) FROM comments c WHERE c.story_id=s.id AND c.status='open') AS comments_count,
                     (SELECT COUNT(*) FROM favorites f2 WHERE f2.story_id=s.id) AS favorites_count,
-                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count
+                    (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count,
+                    (SELECT COUNT(*) FROM story_updates su WHERE su.story_id=s.id) AS update_count,
+                    (SELECT su.body FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_body,
+                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at
                 FROM favorites f
                 JOIN users u ON u.id=f.user_id
                 JOIN stories s ON s.id=f.story_id
@@ -1666,10 +1688,16 @@ class DB:
                     return {"status": "unchanged", "current": current}
                 return {"status": "invalid_transition", "current": current}
 
-            await db.execute(
-                "UPDATE stories SET status=? WHERE id=?",
-                (target_status, sid),
-            )
+            if current == "closed" and target_status == "open":
+                await db.execute(
+                    "UPDATE stories SET status=?, reopened_at=? WHERE id=?",
+                    (target_status, now(), sid),
+                )
+            else:
+                await db.execute(
+                    "UPDATE stories SET status=? WHERE id=?",
+                    (target_status, sid),
+                )
             await db.commit()
             return {"status": "updated", "previous": current, "current": target_status}
 

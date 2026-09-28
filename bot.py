@@ -328,6 +328,10 @@ def feed_options(cat_key="all", sort="new"):
 def feed_case_status(story):
     if story["is_demo"]:
         return "🧪 Пример"
+    if story["status"] == "open" and story["reopened_at"]:
+        return "🔓 Возобновлено"
+    if int(story["update_count"] or 0) > 0:
+        return "📝 Обновлено"
     if story["comments_count"] == 0:
         return "🆘 Нужны советы"
     if story["discussion_count"] > 0:
@@ -349,9 +353,23 @@ def story_status_label(status):
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
 
-    excerpt = str(story["body"]).strip()
-    if len(excerpt) > 280:
-        excerpt = excerpt[:280].rstrip() + "…"
+    update_count = int(story["update_count"] or 0)
+    latest_update = str(story["latest_update_body"] or "").strip()
+
+    if update_count and latest_update:
+        excerpt = latest_update
+        if len(excerpt) > 280:
+            excerpt = excerpt[:280].rstrip() + "…"
+        content = (
+            "📝 <b>Автор обновил ситуацию</b>\n"
+            f"{h(excerpt)}\n\n"
+            "<i>📜 Исходная история сохранена в деле</i>"
+        )
+    else:
+        excerpt = str(story["body"]).strip()
+        if len(excerpt) > 280:
+            excerpt = excerpt[:280].rstrip() + "…"
+        content = h(excerpt)
 
     filter_label = FEED_CATEGORIES[cat_key][0]
     sort_label = FEED_SORTS[sort]
@@ -363,7 +381,7 @@ def feed_card_text(story, index, total, cat_key="all", sort="new"):
         f"⚖️ <b>ДЕЛО №{story['id']}</b>\n"
         f"{h(story['category'])} · {h(status)}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"{h(excerpt)}\n\n"
+        f"{content}\n\n"
         "────────────\n"
         f"👁 {story['views']}   💬 {story['comments_count']}   "
         f"🗣 {story['discussion_count']}   ⭐ {story['favorites_count']}\n"
@@ -500,15 +518,48 @@ def case_text(story):
     if not story["is_demo"]:
         status_line = f"\n{story_status_label(story['status'])}"
 
-    body = h(story["body"][:3000])
-    if len(story["body"]) > 3000:
-        body += "…"
+    update_count = int(story["update_count"] or 0)
+    latest_update = str(story["latest_update_body"] or "").strip()
+    original_body = str(story["body"]).strip()
+
+    if update_count and latest_update:
+        update_body = latest_update[:1800]
+        if len(latest_update) > 1800:
+            update_body += "…"
+
+        original_preview = original_body[:1400]
+        if len(original_body) > 1400:
+            original_preview += "…"
+
+        lifecycle_badge = (
+            "🔓 <b>Дело возобновлено</b>\n"
+            if story["status"] == "open" and story["reopened_at"]
+            else "📝 <b>Ситуация обновлена автором</b>\n"
+        )
+        content = (
+            f"{lifecycle_badge}"
+            "📝 <b>ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ</b>\n"
+            f"{h(update_body)}\n\n"
+            "────────────\n"
+            "📜 <b>ИСХОДНАЯ СИТУАЦИЯ</b>\n"
+            f"{h(original_preview)}"
+        )
+    else:
+        body = original_body[:3000]
+        if len(original_body) > 3000:
+            body += "…"
+        reopen_prefix = (
+            "🔓 <b>Дело возобновлено автором</b>\n\n"
+            if story["status"] == "open" and story["reopened_at"]
+            else ""
+        )
+        content = reopen_prefix + h(body)
 
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
         f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
-        f"{body}\n\n"
+        f"{content}\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -548,9 +599,10 @@ def case_keyboard(
             callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    if not story["is_demo"]:
+    update_count = int(story["update_count"] or 0)
+    if not story["is_demo"] and update_count > 1:
         b.button(
-            text="📝 Обновления",
+            text=f"📚 История · {update_count}",
             callback_data=f"updates:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
@@ -668,13 +720,14 @@ async def render_story_updates(message, sid, feed_index=0, back_to="feed", cat_k
     if not story or story["status"] in {"hidden", "deleted"}:
         await safe_edit(message, "📝 Обновления дела недоступны.", home_inline(message.chat.id))
         return
-    rows = await db.story_updates(sid, 5)
+    update_count = int(story["update_count"] or 0)
+    rows = await db.story_updates(sid, max(20, update_count))
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ К делу", callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
     if not rows:
         await safe_edit(message, "📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>\n\nПока обновлений нет.", b.as_markup())
         return
-    blocks = ["📝 <b>ОБНОВЛЕНИЯ АВТОРА</b>"]
+    blocks = ["📚 <b>ИСТОРИЯ ОБНОВЛЕНИЙ</b>"]
     for n, row in enumerate(reversed(rows), 1):
         blocks.append(f"<b>Обновление {n}</b>\n{h(row['body'])}")
     await safe_edit(message, "\n\n".join(blocks), b.as_markup())
@@ -1222,7 +1275,8 @@ async def render_my_cases(message, user_id, index=0, edit=True):
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
         f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n"
-        f"{story_status_label(story['status'])}\n\n"
+        f"{story_status_label(story['status'])}\n"
+        f"{('📝 Обновлений: ' + str(story['update_count'])) if int(story['update_count'] or 0) else ''}\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1265,7 +1319,8 @@ async def render_favorites(message, user_id, index=0, edit=True):
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
         f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n"
-        f"{story_status_label(story['status'])}\n\n"
+        f"{story_status_label(story['status'])}\n"
+        f"{('📝 Обновлений: ' + str(story['update_count'])) if int(story['update_count'] or 0) else ''}\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1957,8 +2012,8 @@ async def story_update_message(m: Message, state: FSMContext):
     if followers:
         b = InlineKeyboardBuilder()
         b.button(
-            text="📝 Читать обновление",
-            callback_data=f"updates:{sid}:0:feed:all:new",
+            text="📖 Открыть дело",
+            callback_data=f"case:{sid}:0:all:new",
         )
         asyncio.create_task(
             notify_many(
