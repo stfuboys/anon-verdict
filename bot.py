@@ -1176,6 +1176,12 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
             show_alert=True,
         )
         return
+    if int(story["author_tg_id"]) == int(c.from_user.id):
+        await c.answer(
+            "Нельзя давать советы собственному делу.",
+            show_alert=True,
+        )
+        return
 
     await state.update_data(
         sid=sid,
@@ -1260,8 +1266,14 @@ async def comment(m: Message, state: FSMContext):
         text="⬅️ К делу",
         callback_data=f"case:{d['sid']}:{feed_index}:{cat_key}:{sort}",
     )
+    reward = int(result.get("reputation_reward", 0))
+    reward_line = (
+        f"<b>+{reward} репутации.</b>"
+        if reward
+        else "Повторный совет к этому делу репутацию не начисляет."
+    )
     await m.answer(
-        "✅ Совет опубликован. <b>+2 репутации.</b>\n\n"
+        "✅ Совет опубликован. " + reward_line + "\n\n"
         "Если другие участники поставят 👍, репутация автора совета тоже вырастет.\n\n"
         f"🎖️ {h(u['title'])} · ⭐ {u['reputation']}",
         parse_mode="HTML",
