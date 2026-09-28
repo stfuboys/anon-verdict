@@ -2375,6 +2375,19 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
         return
 
     if action == "c":
+        if await db.comment_count(sid) > 0:
+            await render_best_answer_picker(
+                c.message,
+                c.from_user.id,
+                sid,
+                0,
+                feed_index,
+                back_to,
+                cat_key,
+                sort,
+            )
+            await c.answer()
+            return
         result = await db.close_story_with_best(c.from_user.id, sid)
     else:
         result = await db.change_own_story_status(c.from_user.id, sid, target)
