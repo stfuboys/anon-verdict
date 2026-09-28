@@ -24,3 +24,18 @@ Optional:
 - `OPENAI_MODEL`
 
 Do not commit real tokens or private Telegram IDs to this public repository.
+
+
+## CEO panel
+
+When `OWNER_TG_ID` matches the current Telegram user, the owner sees a private `🛡️ CEO Панель` button and can also use `/admin`.
+
+Current owner-only controls:
+- project statistics
+- recent users
+- user lookup by Telegram ID
+- assign/remove team labels (Developer / Moderator)
+- recent real cases
+- hide a case from the public court or restore it
+
+All admin callbacks verify the owner Telegram ID server-side. Team labels do not grant CEO permissions.
