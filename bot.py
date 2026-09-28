@@ -405,8 +405,8 @@ def case_text(story):
         f"🏷️ {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
-        f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']}"
+        f"👁 Уникальных просмотров: {story['views']}\n"
+        f"💬 Советов: {story['comments_count']} · ⭐ Сохранений: {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -423,7 +423,7 @@ def case_keyboard(
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
-    if not story["is_demo"]:
+    if not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
             callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}",
@@ -436,18 +436,17 @@ def case_keyboard(
         )
 
     b.button(
+        text="✅ Сохранено" if favorite else "⭐ Сохранить",
+        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.button(
         text="🧠 Разбор",
         callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}",
     )
 
-    b.button(
-        text="✅ В избранном" if favorite else "⭐ В избранное",
-        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
-    )
-
     if not story["is_demo"] and not own_story:
         b.button(
-            text="🚩 Пожаловаться",
+            text="🚩 Жалоба",
             callback_data=f"report:story:{story['id']}",
         )
 
@@ -457,12 +456,11 @@ def case_keyboard(
         b.button(text="⬅️ К избранному", callback_data=f"favorites:{feed_index}")
     else:
         b.button(
-            text="⬅️ В зал суда",
+            text="⬅️ Назад в ленту",
             callback_data=f"feed:{feed_index}:{cat_key}:{sort}",
         )
 
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 2, 1, 1, 1)
+    b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
 
@@ -475,16 +473,20 @@ async def render_case(
     cat_key="all",
     sort="new",
 ):
-    story = await db.story(sid, count_view)
+    viewer_id = message.chat.id
+    story = await db.story(
+        sid,
+        view=count_view,
+        viewer_tg_id=viewer_id if count_view else None,
+    )
     if not story:
         await safe_edit(
             message,
             "Дело не найдено.",
-            home_inline(message.chat.id),
+            home_inline(viewer_id),
         )
         return
 
-    viewer_id = message.chat.id
     favorite = await db.favorite_state(viewer_id, sid)
     own_story = int(story["author_tg_id"]) == int(viewer_id)
 
