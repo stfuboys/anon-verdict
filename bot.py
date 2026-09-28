@@ -548,7 +548,12 @@ def case_text(story):
         body = original_body[:3000]
         if len(original_body) > 3000:
             body += "…"
-        content = h(body)
+        reopen_prefix = (
+            "🔓 <b>Дело возобновлено автором</b>\n\n"
+            if story["status"] == "open" and story["reopened_at"]
+            else ""
+        )
+        content = reopen_prefix + h(body)
 
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
@@ -715,7 +720,8 @@ async def render_story_updates(message, sid, feed_index=0, back_to="feed", cat_k
     if not story or story["status"] in {"hidden", "deleted"}:
         await safe_edit(message, "📝 Обновления дела недоступны.", home_inline(message.chat.id))
         return
-    rows = await db.story_updates(sid, 20)
+    update_count = int(story["update_count"] or 0)
+    rows = await db.story_updates(sid, max(20, update_count))
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ К делу", callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
     if not rows:
