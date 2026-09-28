@@ -92,6 +92,7 @@ CATS = [
 
 RATING_PAGE_SIZE = 10
 ADMIN_PAGE_SIZE = 5
+STORY_BODY_MIN = 30
 
 
 class Story(StatesGroup):
@@ -560,6 +561,7 @@ def case_text(story):
         f"🏷️ {h(story['category'])}{status_line}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{content}\n\n"
+        f"{'🏆 Лучший ответ выбран автором\n\n' if story['best_comment_id'] else ''}"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -891,8 +893,9 @@ def comment_text(comment, index, total):
     role = ""
     if comment["staff_role"] and comment["staff_role"] != "SYSTEM":
         role = f"\n🛡️ {h(comment['staff_role'])}"
+    best = "\n🏆 <b>Лучший ответ автора</b>" if comment["is_best"] else ""
     return (
-        f"💬 <b>СОВЕТЫ К ДЕЛУ</b>\n\n"
+        f"💬 <b>СОВЕТЫ К ДЕЛУ</b>{best}\n\n"
         f"<b>{h(comment['nickname'])}</b> · {h(comment['title'])}"
         f"{role}\n\n"
         f"{h(comment['body'])}\n\n"
@@ -1734,8 +1737,9 @@ async def title(m: Message, state: FSMContext):
     await state.update_data(title=text)
     await state.set_state(Story.body)
     await m.answer(
-        "Теперь расскажи ситуацию подробно.\n"
-        "Не указывай телефоны, адреса, документы и другие персональные данные."
+        f"Теперь расскажи ситуацию подробно — минимум <b>{STORY_BODY_MIN} символов</b>.\n"
+        "Не указывай телефоны, адреса, документы и другие персональные данные.",
+        parse_mode="HTML",
     )
 
 
@@ -1753,6 +1757,14 @@ async def body(m: Message, state: FSMContext):
         return
     if reasons:
         await m.answer("Удали из текста персональные данные или угрозы.")
+        return
+    if len(text) < STORY_BODY_MIN:
+        missing = STORY_BODY_MIN - len(text)
+        await m.answer(
+            f"✍️ Слишком коротко: <b>{len(text)}/{STORY_BODY_MIN}</b> символов.\n"
+            f"Добавь ещё минимум <b>{missing}</b>.",
+            parse_mode="HTML",
+        )
         return
 
     if not is_owner(m.from_user.id):
