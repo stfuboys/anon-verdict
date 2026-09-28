@@ -1566,6 +1566,9 @@ async def discussion_message_submit(m: Message, state: FSMContext):
 
     await state.clear()
 
+    total = await db.discussion_count(sid)
+    latest_index = max(0, total - 1)
+
     feed_index = data.get("discussion_feed_index", 0)
     cat_key = data.get("discussion_cat_key", "all")
     sort = data.get("discussion_sort", "new")
@@ -1581,7 +1584,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
         rb = InlineKeyboardBuilder()
         rb.button(
             text="🗣 Открыть обсуждение",
-            callback_data=f"discuss:{sid}:0:0:all:new",
+            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
         )
         await safe_notify(
             reply_tg_id,
@@ -1602,7 +1605,7 @@ async def discussion_message_submit(m: Message, state: FSMContext):
             rb = InlineKeyboardBuilder()
             rb.button(
                 text="🗣 Открыть обсуждение",
-                callback_data=f"discuss:{sid}:0:0:all:new",
+                callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
             )
             asyncio.create_task(
                 notify_many(
@@ -1614,11 +1617,10 @@ async def discussion_message_submit(m: Message, state: FSMContext):
                 )
             )
 
-    total = await db.discussion_count(sid)
     b = InlineKeyboardBuilder()
     b.button(
         text="🗣 Открыть обсуждение",
-        callback_data=f"discuss:{sid}:{max(0, total - 1)}:{feed_index}:{cat_key}:{sort}",
+        callback_data=f"discuss:{sid}:{latest_index}:{feed_index}:{cat_key}:{sort}",
     )
     b.button(
         text="⬅️ К делу",
@@ -2001,7 +2003,7 @@ async def favorite_toggle_callback(c: CallbackQuery):
         sort=sort,
     )
     await c.answer(
-        "⭐ Дело сохранено. Буду сообщать о новых советах."
+        "⭐ Дело сохранено. Буду сообщать о важных обновлениях."
         if enabled
         else "Дело удалено из избранного."
     )
@@ -2069,7 +2071,7 @@ async def report_menu_callback(c: CallbackQuery):
     else:
         b.button(
             text="⬅️ К обсуждению",
-            callback_data=f"discuss:{sid}:0:0:all:new",
+            callback_data=f"discuss:{sid}:{latest_index}:0:all:new",
         )
     b.adjust(1)
 
