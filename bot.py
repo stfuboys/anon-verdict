@@ -93,6 +93,10 @@ class Comment(StatesGroup):
     body = State()
 
 
+class Admin(StatesGroup):
+    user_lookup = State()
+
+
 def h(value):
     return html.escape(str(value or ""), quote=False)
 
@@ -126,6 +130,27 @@ def menu():
 def home_button():
     b = InlineKeyboardBuilder()
     b.button(text="🏠 Главное меню", callback_data="home")
+    return b.as_markup()
+
+
+def is_owner(user_id):
+    return owner_id is not None and int(user_id) == owner_id
+
+
+def admin_menu():
+    b = InlineKeyboardBuilder()
+    b.button(text="📊 Статистика", callback_data="admin:stats")
+    b.button(text="👥 Пользователи", callback_data="admin:users")
+    b.button(text="🔎 Найти по Telegram ID", callback_data="admin:find")
+    b.button(text="⚖️ Дела", callback_data="admin:cases")
+    b.button(text="🏠 Выйти", callback_data="home")
+    b.adjust(2, 1, 1, 1)
+    return b.as_markup()
+
+
+def admin_back():
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ CEO-панель", callback_data="admin:home")
     return b.as_markup()
 
 
@@ -652,6 +677,321 @@ async def menu_help(m: Message):
         parse_mode="HTML",
         reply_markup=main_keyboard(),
     )
+
+
+
+@dp.message(Command("admin"))
+async def admin_command(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if not is_owner(m.from_user.id):
+        await m.answer("Команда недоступна.")
+        return
+    await state.clear()
+    await m.answer(
+        "🛡️ <b>CEO ANON VERDICT</b>\n\n"
+        "Панель управления проектом. Здесь можно смотреть статистику, "
+        "пользователей и дела, а также назначать роли команде.",
+        parse_mode="HTML",
+        reply_markup=admin_menu(),
+    )
+
+
+@dp.callback_query(F.data == "admin:home")
+async def admin_home(c: CallbackQuery, state: FSMContext):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    await c.message.answer(
+        "🛡️ <b>CEO ANON VERDICT</b>\n\nВыбери раздел:",
+        parse_mode="HTML",
+        reply_markup=admin_menu(),
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "admin:stats")
+async def admin_stats(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    s = await db.admin_stats()
+    await c.message.answer(
+        "📊 <b>СТАТИСТИКА ANON VERDICT</b>\n\n"
+        f"👥 Пользователи: <b>{s['users']}</b>\n"
+        f"🛡️ Команда: <b>{s['staff']}</b>\n"
+        f"⚖️ Реальные дела: <b>{s['stories']}</b>\n"
+        f"🟢 Открытые: <b>{s['open_stories']}</b>\n"
+        f"🙈 Скрытые: <b>{s['hidden_stories']}</b>\n"
+        f"💬 Советы: <b>{s['comments']}</b>\n"
+        f"👍👎 Реакции: <b>{s['reactions']}</b>",
+        parse_mode="HTML",
+        reply_markup=admin_back(),
+    )
+    await c.answer()
+
+
+async def send_admin_user(target, tg_id):
+    u = await db.admin_user(tg_id)
+    if not u:
+        await target.answer(
+            "Пользователь с таким Telegram ID не найден.",
+            reply_markup=admin_back(),
+        )
+        return
+
+    role = h(u["staff_role"] or "обычный пользователь")
+    username = f"@{h(u['tg_username'])}" if u["tg_username"] else "не указан"
+    text = (
+        "👤 <b>КАРТОЧКА ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+        f"Telegram ID: <code>{u['tg_id']}</code>\n"
+        f"Username: {username}\n"
+        f"Ник в Anon Verdict: <b>{h(u['nickname'])}</b>\n"
+        f"Роль: <b>{role}</b>\n"
+        f"Звание: <b>{h(u['title'])}</b>\n"
+        f"⭐ Репутация: <b>{u['reputation']}</b>\n"
+        f"⚖️ Дел: <b>{u['stories_count']}</b>\n"
+        f"💬 Советов: <b>{u['comments_count']}</b>"
+    )
+
+    b = InlineKeyboardBuilder()
+    if int(u["tg_id"]) != owner_id:
+        b.button(
+            text="💻 Developer",
+            callback_data=f"admin:role:{u['tg_id']}:developer",
+        )
+        b.button(
+            text="🛡️ Moderator",
+            callback_data=f"admin:role:{u['tg_id']}:moderator",
+        )
+        b.button(
+            text="👤 Снять роль",
+            callback_data=f"admin:role:{u['tg_id']}:clear",
+        )
+    b.button(text="⬅️ CEO-панель", callback_data="admin:home")
+    b.adjust(2, 1, 1)
+    await target.answer(text, parse_mode="HTML", reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "admin:users")
+async def admin_users(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    rows = await db.recent_users(10)
+    if not rows:
+        await c.message.answer(
+            "👥 Пользователей пока нет.",
+            reply_markup=admin_back(),
+        )
+        await c.answer()
+        return
+
+    b = InlineKeyboardBuilder()
+    for u in rows:
+        icon = "🛡️" if u["staff_role"] else "👤"
+        b.button(
+            text=f"{icon} {u['nickname'][:24]} · {u['tg_id']}",
+            callback_data=f"admin:user:{u['tg_id']}",
+        )
+    b.button(text="🔎 Найти по ID", callback_data="admin:find")
+    b.button(text="⬅️ CEO-панель", callback_data="admin:home")
+    b.adjust(1)
+    await c.message.answer(
+        "👥 <b>ПОСЛЕДНИЕ ПОЛЬЗОВАТЕЛИ</b>\n\n"
+        "Нажми на пользователя, чтобы открыть карточку.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "admin:find")
+async def admin_find(c: CallbackQuery, state: FSMContext):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(Admin.user_lookup)
+    await c.message.answer(
+        "🔎 Отправь Telegram ID пользователя числом.\n\n"
+        "Например: <code>123456789</code>",
+        parse_mode="HTML",
+        reply_markup=admin_back(),
+    )
+    await c.answer()
+
+
+@dp.message(Admin.user_lookup)
+async def admin_find_result(m: Message, state: FSMContext):
+    if not is_owner(m.from_user.id):
+        await state.clear()
+        return
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await m.answer("Нужен Telegram ID — только цифры.")
+        return
+    await state.clear()
+    await send_admin_user(m, int(raw))
+
+
+@dp.callback_query(F.data.startswith("admin:user:"))
+async def admin_user_card(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        tg_id = int(c.data.split(":")[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ID", show_alert=True)
+        return
+    await send_admin_user(c.message, tg_id)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:role:"))
+async def admin_set_role(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, _, raw_tg_id, role_key = c.data.split(":")
+        tg_id = int(raw_tg_id)
+    except (ValueError, IndexError):
+        await c.answer("Некорректная команда", show_alert=True)
+        return
+
+    if tg_id == owner_id:
+        await c.answer("Роль CEO защищена.", show_alert=True)
+        return
+
+    roles = {
+        "developer": "Developer Anon Verdict",
+        "moderator": "Moderator Anon Verdict",
+        "clear": "",
+    }
+    if role_key not in roles:
+        await c.answer("Неизвестная роль", show_alert=True)
+        return
+
+    ok = await db.set_staff_role(tg_id, roles[role_key])
+    if not ok:
+        await c.answer("Пользователь не найден", show_alert=True)
+        return
+
+    label = roles[role_key] or "роль снята"
+    await c.answer(f"Готово: {label}", show_alert=True)
+    await send_admin_user(c.message, tg_id)
+
+
+@dp.callback_query(F.data == "admin:cases")
+async def admin_cases(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    rows = await db.recent_stories_admin(10)
+    if not rows:
+        await c.message.answer(
+            "⚖️ Реальных дел пока нет.",
+            reply_markup=admin_back(),
+        )
+        await c.answer()
+        return
+
+    b = InlineKeyboardBuilder()
+    for s in rows:
+        icon = "🟢" if s["status"] == "open" else "🙈"
+        title = str(s["title"])[:28]
+        b.button(
+            text=f"{icon} #{s['id']} · {title}",
+            callback_data=f"admin:story:{s['id']}",
+        )
+    b.button(text="⬅️ CEO-панель", callback_data="admin:home")
+    b.adjust(1)
+
+    await c.message.answer(
+        "⚖️ <b>ПОСЛЕДНИЕ ДЕЛА</b>\n\n"
+        "🟢 открыто · 🙈 скрыто",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:story:"))
+async def admin_story_card(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        sid = int(c.data.split(":")[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный номер дела", show_alert=True)
+        return
+
+    s = await db.admin_story(sid)
+    if not s:
+        await c.answer("Дело не найдено", show_alert=True)
+        return
+
+    status = "🟢 открыто" if s["status"] == "open" else "🙈 скрыто"
+    username = h(s["author_nickname"])
+    await c.message.answer(
+        f"⚖️ <b>ДЕЛО №{s['id']}</b>\n\n"
+        f"Статус: <b>{status}</b>\n"
+        f"Категория: {h(s['category'])}\n"
+        f"Автор в сервисе: <b>{username}</b>\n"
+        f"Telegram ID автора: <code>{s['author_tg_id']}</code>\n"
+        f"👁 {s['views']} · 💬 {s['comments_count']}\n\n"
+        f"<b>{h(s['title'])}</b>\n"
+        f"{h(s['body'])}",
+        parse_mode="HTML",
+    )
+
+    b = InlineKeyboardBuilder()
+    if s["status"] == "open":
+        b.button(
+            text="🙈 Скрыть дело",
+            callback_data=f"admin:story-status:{sid}:hidden",
+        )
+    else:
+        b.button(
+            text="🟢 Вернуть в зал",
+            callback_data=f"admin:story-status:{sid}:open",
+        )
+    b.button(text="⬅️ К делам", callback_data="admin:cases")
+    b.adjust(1)
+    await c.message.answer("Управление делом:", reply_markup=b.as_markup())
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:story-status:"))
+async def admin_story_status(c: CallbackQuery):
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, _, raw_sid, status = c.data.split(":")
+        sid = int(raw_sid)
+    except (ValueError, IndexError):
+        await c.answer("Некорректная команда", show_alert=True)
+        return
+
+    if status not in {"open", "hidden"}:
+        await c.answer("Некорректный статус", show_alert=True)
+        return
+
+    ok = await db.set_story_status(sid, status)
+    if not ok:
+        await c.answer("Дело не найдено", show_alert=True)
+        return
+
+    message = "Дело возвращено в Зал суда." if status == "open" else "Дело скрыто из Зала суда."
+    await c.answer(message, show_alert=True)
 
 
 @dp.message(Command("profile"))
