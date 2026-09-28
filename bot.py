@@ -405,7 +405,7 @@ def case_text(story):
         f"🏷️ {h(story['category'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
-        f"👁 Уникальных просмотров: {story['views']}\n"
+        f"👁 Просмотров: {story['views']}\n"
         f"💬 Советов: {story['comments_count']} · ⭐ Сохранений: {story['favorites_count']}"
         f"{demo_note}"
     )
@@ -1145,6 +1145,36 @@ async def feed_sort_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("random:"))
+async def random_case_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        current_index = int(parts[1])
+    except (ValueError, IndexError):
+        current_index = 0
+
+    cat_key = parts[2] if len(parts) > 2 else "all"
+    sort = parts[3] if len(parts) > 3 else "new"
+    cat_key, sort, category = feed_options(cat_key, sort)
+
+    total = await db.feed_count(category=category, sort=sort)
+    if total == 0:
+        await c.answer("По этим фильтрам дел пока нет.", show_alert=True)
+        return
+
+    if total == 1:
+        random_index = 0
+    else:
+        current_index = clamp(current_index, 0, total - 1)
+        random_index = secrets.randbelow(total - 1)
+        if random_index >= current_index:
+            random_index += 1
+
+    await render_feed(c.message, random_index, cat_key, sort)
+    await c.answer("🎲 Случайное дело")
+
+
 @dp.callback_query(F.data.startswith("case:"))
 async def case_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -1741,7 +1771,8 @@ async def help_callback(c: CallbackQuery):
         c.message,
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
         "📝 <b>Подать дело</b> — анонимно рассказать ситуацию.\n"
-        "🏛️ <b>Зал суда</b> — листать дела по одному, фильтровать по категориям и сортировать.\n"
+        "🏛️ <b>Зал суда</b> — компактная лента: короткое превью, фильтры и сортировка.\n"
+        "🎲 Случайное дело — быстрый переход к другой истории.\n"
         "🔥 Можно открыть популярные дела или найти те, где ещё нет советов.\n"
         "💬 <b>Советы</b> — тоже листаются внутри одного сообщения.\n"
         "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
@@ -1820,7 +1851,7 @@ async def menu_help(m: Message):
     await m.answer(
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
         "📝 Подай дело → расскажи ситуацию анонимно.\n"
-        "🏛️ Зал суда → листай дела, выбирай категорию и сортировку.\n"
+        "🏛️ Зал суда → короткие карточки, фильтры, сортировка и 🎲 случайное дело.\n"
         "🔥 Популярные / 🆘 без советов → быстрые режимы ленты.\n"
         "💬 Советы → листай внутри карточки дела.\n"
         "⚖️ Мои дела → следи за своими публикациями.\n"
