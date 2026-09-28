@@ -4,7 +4,7 @@ import os
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -117,8 +117,8 @@ def main_keyboard(user_id=None):
     rows = [
         [KeyboardButton(text="📝 Подать дело"), KeyboardButton(text="🏛️ Зал суда")],
         [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="🏆 Рейтинг")],
-        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="🎖️ Звания")],
-        [KeyboardButton(text="ℹ️ Как это работает")],
+        [KeyboardButton(text="⚖️ Мои дела"), KeyboardButton(text="⭐ Избранное")],
+        [KeyboardButton(text="🎖️ Звания"), KeyboardButton(text="ℹ️ Как это работает")],
     ]
     if is_owner(user_id):
         rows.append([KeyboardButton(text="🛡️ CEO Панель")])
@@ -135,15 +135,16 @@ def home_inline(user_id=None):
     b = InlineKeyboardBuilder()
     b.button(text="🏛️ Зал суда", callback_data="feed:0")
     b.button(text="⚖️ Мои дела", callback_data="my:0")
+    b.button(text="⭐ Избранное", callback_data="favorites:0")
     b.button(text="👤 Профиль", callback_data="profile")
     b.button(text="🏆 Рейтинг", callback_data="rating:0")
     b.button(text="🎖️ Звания", callback_data="ranks")
     b.button(text="ℹ️ Как это работает", callback_data="help")
     if is_owner(user_id):
         b.button(text="🛡️ CEO Панель", callback_data="admin:home")
-        b.adjust(2, 2, 2, 1)
+        b.adjust(2, 2, 2, 1, 1)
     else:
-        b.adjust(2, 2, 2)
+        b.adjust(2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -175,6 +176,21 @@ async def safe_edit(message, text, reply_markup=None):
             raise
 
 
+async def safe_notify(tg_id, text, reply_markup=None):
+    if not tg_id:
+        return False
+    try:
+        await bot.send_message(
+            tg_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest):
+        return False
+
+
 async def ensure_message_user(m: Message):
     await db.ensure_user(m.from_user.id, m.from_user.username)
 
@@ -204,6 +220,14 @@ FEED_SORTS = {
     "new": "🆕 Новые",
     "popular": "🔥 Популярные",
     "unanswered": "🆘 Без советов",
+}
+
+REPORT_REASONS = {
+    "spam": "📨 Спам",
+    "abuse": "🤬 Оскорбления",
+    "personal": "🔐 Персональные данные",
+    "danger": "⚠️ Опасный контент",
+    "other": "🚩 Другое",
 }
 
 
