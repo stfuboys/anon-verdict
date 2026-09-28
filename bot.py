@@ -276,10 +276,13 @@ async def notify_many(tg_ids, text, reply_markup=None):
 
 async def ensure_message_user(m: Message):
     await db.ensure_user(m.from_user.id, m.from_user.username)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await db.clear_pending_input(m.from_user.id)
 
 
 async def ensure_callback_user(c: CallbackQuery):
     await db.ensure_user(c.from_user.id, c.from_user.username)
+    await db.clear_pending_input(c.from_user.id)
 
 
 def nav_row(builder, prev_data, page_text, next_data):
@@ -1886,8 +1889,16 @@ async def lifecycle_update_callback(c: CallbackQuery, state: FSMContext):
     story=await db.story(sid)
     if not story or story["is_demo"] or int(story["author_tg_id"])!=int(c.from_user.id) or story["status"] not in {"open","closed"}:
         await c.answer("Обновление недоступно.",show_alert=True); return
+    payload = {
+        "sid": sid,
+        "feed_index": feed_index,
+        "back_to": back_to,
+        "cat_key": cat_key,
+        "sort": sort,
+    }
+    await db.set_pending_input(c.from_user.id, "story_update", payload)
     await state.set_state(StoryUpdate.body)
-    await state.update_data(sid=sid,feed_index=feed_index,back_to=back_to,cat_key=cat_key,sort=sort)
+    await state.update_data(**payload)
     cancel=InlineKeyboardBuilder()
     cancel.button(text="❌ Отменить",callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}")
     await c.message.answer(
@@ -2167,15 +2178,17 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
         await c.answer("Обсуждение этого дела недоступно.", show_alert=True)
         return
 
-    await state.update_data(
-        discussion_sid=sid,
-        discussion_offset=offset,
-        discussion_feed_index=feed_index,
-        discussion_cat_key=cat_key,
-        discussion_sort=sort,
-        discussion_back_to=back_to,
-        discussion_reply_to=None,
-    )
+    payload = {
+        "discussion_sid": sid,
+        "discussion_offset": offset,
+        "discussion_feed_index": feed_index,
+        "discussion_cat_key": cat_key,
+        "discussion_sort": sort,
+        "discussion_back_to": back_to,
+        "discussion_reply_to": None,
+    }
+    await db.set_pending_input(c.from_user.id, "discussion", payload)
+    await state.update_data(**payload)
     await state.set_state(Discussion.body)
     cancel = InlineKeyboardBuilder()
     cancel.button(
@@ -2231,15 +2244,17 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
     if len(quote) > 180:
         quote = quote[:180].rstrip() + "…"
 
-    await state.update_data(
-        discussion_sid=sid,
-        discussion_offset=offset,
-        discussion_feed_index=feed_index,
-        discussion_cat_key=cat_key,
-        discussion_sort=sort,
-        discussion_back_to=back_to,
-        discussion_reply_to=message_id,
-    )
+    payload = {
+        "discussion_sid": sid,
+        "discussion_offset": offset,
+        "discussion_feed_index": feed_index,
+        "discussion_cat_key": cat_key,
+        "discussion_sort": sort,
+        "discussion_back_to": back_to,
+        "discussion_reply_to": message_id,
+    }
+    await db.set_pending_input(c.from_user.id, "discussion", payload)
+    await state.update_data(**payload)
     await state.set_state(Discussion.body)
     cancel = InlineKeyboardBuilder()
     cancel.button(
@@ -2547,13 +2562,15 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
         await c.answer("Нельзя давать совет собственному делу.", show_alert=True)
         return
 
-    await state.update_data(
-        sid=sid,
-        feed_index=feed_index,
-        cat_key=cat_key,
-        sort=sort,
-        back_to=back_to,
-    )
+    payload = {
+        "sid": sid,
+        "feed_index": feed_index,
+        "cat_key": cat_key,
+        "sort": sort,
+        "back_to": back_to,
+    }
+    await db.set_pending_input(c.from_user.id, "comment", payload)
+    await state.update_data(**payload)
     await state.set_state(Comment.body)
     cancel = InlineKeyboardBuilder()
     cancel.button(
