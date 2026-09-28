@@ -323,7 +323,7 @@ def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
     return b.as_markup()
 
 
-async def render_feed(message, index=0, cat_key="all", sort="new"):
+async def render_feed(message, index=0, cat_key="all", sort="new", edit=True):
     cat_key, sort, category = feed_options(cat_key, sort)
     total = await db.feed_count(category=category, sort=sort)
     if total == 0:
@@ -337,11 +337,12 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
             callback_data=f"feedsort:{cat_key}:{sort}",
         )
         b.adjust(1)
-        await safe_edit(
+        await present(
             message,
             "🏛️ <b>ЗАЛ СУДА</b>\n\n"
             "По выбранным фильтрам дел пока нет.",
             b.as_markup(),
+            edit=edit,
         )
         return
 
@@ -351,10 +352,11 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
         index = 0
         story = await db.feed_item(0, category=category, sort=sort)
 
-    await safe_edit(
+    await present(
         message,
         feed_card_text(story, index, total, cat_key, sort),
         feed_keyboard(index, total, story["id"], cat_key, sort),
+        edit=edit,
     )
 
 
