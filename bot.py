@@ -913,6 +913,27 @@ async def render_comments(
     total = await db.comment_count(sid)
     if int(story["author_tg_id"]) == int(message.chat.id):
         await db.mark_advice_seen(message.chat.id, sid, total)
+        inbox = await db.advice_inbox(message.chat.id, sid)
+        if inbox and inbox["message_id"]:
+            try:
+                b = InlineKeyboardBuilder()
+                b.button(
+                    text=f"💬 Читать ответы · {total}",
+                    callback_data=f"comments:{sid}:{max(0,total-1)}:0:all:new:my",
+                )
+                await bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=int(inbox["message_id"]),
+                    text=(
+                        "💬 <b>ОТВЕТЫ К ТВОЕМУ ДЕЛУ</b>\n\n"
+                        f"⚖️ {h(story['title'])}\n"
+                        f"✅ Всё прочитано · Всего: <b>{total}</b>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=b.as_markup(),
+                )
+            except TelegramBadRequest:
+                pass
     if total == 0:
         favorite = await db.favorite_state(message.chat.id, sid)
         own_story = int(story["author_tg_id"]) == int(message.chat.id)
