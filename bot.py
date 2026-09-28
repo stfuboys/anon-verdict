@@ -191,6 +191,18 @@ async def safe_notify(tg_id, text, reply_markup=None):
         return False
 
 
+async def notify_many(tg_ids, text, reply_markup=None):
+    unique_ids = list(dict.fromkeys(int(x) for x in tg_ids if x))
+    for start in range(0, len(unique_ids), 20):
+        batch = unique_ids[start:start + 20]
+        await asyncio.gather(
+            *(safe_notify(tg_id, text, reply_markup) for tg_id in batch),
+            return_exceptions=True,
+        )
+        if start + 20 < len(unique_ids):
+            await asyncio.sleep(1)
+
+
 async def ensure_message_user(m: Message):
     await db.ensure_user(m.from_user.id, m.from_user.username)
 
