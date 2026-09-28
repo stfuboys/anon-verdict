@@ -1,6 +1,7 @@
 import asyncio
 import html
 import os
+import secrets
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
@@ -254,21 +255,22 @@ def feed_options(cat_key="all", sort="new"):
 def feed_card_text(story, index, total, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
     badge = "\n🧪 <i>Пример от Anon Verdict</i>" if story["is_demo"] else ""
-    excerpt = h(story["body"][:900])
-    if len(story["body"]) > 900:
-        excerpt += "…"
+
+    excerpt = str(story["body"]).strip()
+    if len(excerpt) > 320:
+        excerpt = excerpt[:320].rstrip() + "…"
 
     filter_label = FEED_CATEGORIES[cat_key][0]
     sort_label = FEED_SORTS[sort]
+
     return (
-        f"🏛️ <b>ЗАЛ СУДА</b>\n"
+        "🏛️ <b>ЗАЛ СУДА</b>\n"
         f"🏷️ {h(filter_label)} · {h(sort_label)}\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b>\n"
-        f"🏷️ {h(story['category'])}"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}"
         f"{badge}\n\n"
-        f"<b>{h(story['title'])}</b>\n"
-        f"{excerpt}\n\n"
-        f"👁 {story['views']} · 💬 {story['comments_count']}\n"
+        f"<b>{h(story['title'])}</b>\n\n"
+        f"{h(excerpt)}\n\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']} · ⭐ {story['favorites_count']}\n"
         f"📄 {index + 1} из {total}"
     )
 
@@ -276,18 +278,12 @@ def feed_card_text(story, index, total, cat_key="all", sort="new"):
 def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
+
     b.button(
         text="📖 Открыть дело",
         callback_data=f"case:{sid}:{index}:{cat_key}:{sort}",
     )
-    b.button(
-        text="🏷️ Категория",
-        callback_data=f"feedcat:{cat_key}:{sort}",
-    )
-    b.button(
-        text="↕️ Сортировка",
-        callback_data=f"feedsort:{cat_key}:{sort}",
-    )
+
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
@@ -296,8 +292,21 @@ def feed_keyboard(index, total, sid, cat_key="all", sort="new"):
         f"{index + 1}/{total}",
         f"feed:{next_i}:{cat_key}:{sort}",
     )
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1, 2, 3, 1)
+
+    b.button(
+        text="🏷 Фильтр",
+        callback_data=f"feedcat:{cat_key}:{sort}",
+    )
+    b.button(
+        text="↕️ Сортировка",
+        callback_data=f"feedsort:{cat_key}:{sort}",
+    )
+    b.button(
+        text="🎲 Случайное",
+        callback_data=f"random:{index}:{cat_key}:{sort}",
+    )
+
+    b.adjust(1, 3, 2, 1)
     return b.as_markup()
 
 
@@ -306,9 +315,14 @@ async def render_feed(message, index=0, cat_key="all", sort="new"):
     total = await db.feed_count(category=category, sort=sort)
     if total == 0:
         b = InlineKeyboardBuilder()
-        b.button(text="🏷️ Сменить категорию", callback_data=f"feedcat:{cat_key}:{sort}")
-        b.button(text="↕️ Сменить сортировку", callback_data=f"feedsort:{cat_key}:{sort}")
-        b.button(text="🏠 Главное меню", callback_data="home")
+        b.button(
+            text="🏷️ Сменить категорию",
+            callback_data=f"feedcat:{cat_key}:{sort}",
+        )
+        b.button(
+            text="↕️ Сменить сортировку",
+            callback_data=f"feedsort:{cat_key}:{sort}",
+        )
         b.adjust(1)
         await safe_edit(
             message,
@@ -392,7 +406,7 @@ def case_text(story):
         f"<b>{h(story['title'])}</b>\n\n"
         f"{body}\n\n"
         f"👁 Просмотров: {story['views']}\n"
-        f"💬 Советов: {story['comments_count']}"
+        f"💬 Советов: {story['comments_count']} · ⭐ Сохранений: {story['favorites_count']}"
         f"{demo_note}"
     )
 
@@ -409,7 +423,7 @@ def case_keyboard(
     cat_key, sort, _ = feed_options(cat_key, sort)
     b = InlineKeyboardBuilder()
 
-    if not story["is_demo"]:
+    if not story["is_demo"] and not own_story:
         b.button(
             text="💬 Дать совет",
             callback_data=f"advice:{story['id']}:{feed_index}:{cat_key}:{sort}",
@@ -422,18 +436,17 @@ def case_keyboard(
         )
 
     b.button(
+        text="✅ Сохранено" if favorite else "⭐ Сохранить",
+        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.button(
         text="🧠 Разбор",
         callback_data=f"ai:{story['id']}:{feed_index}:{cat_key}:{sort}",
     )
 
-    b.button(
-        text="✅ В избранном" if favorite else "⭐ В избранное",
-        callback_data=f"fav:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
-    )
-
     if not story["is_demo"] and not own_story:
         b.button(
-            text="🚩 Пожаловаться",
+            text="🚩 Жалоба",
             callback_data=f"report:story:{story['id']}",
         )
 
@@ -443,12 +456,11 @@ def case_keyboard(
         b.button(text="⬅️ К избранному", callback_data=f"favorites:{feed_index}")
     else:
         b.button(
-            text="⬅️ В зал суда",
+            text="⬅️ Назад в ленту",
             callback_data=f"feed:{feed_index}:{cat_key}:{sort}",
         )
 
-    b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 2, 1, 1, 1)
+    b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
 
@@ -461,16 +473,20 @@ async def render_case(
     cat_key="all",
     sort="new",
 ):
-    story = await db.story(sid, count_view)
+    viewer_id = message.chat.id
+    story = await db.story(
+        sid,
+        view=count_view,
+        viewer_tg_id=viewer_id if count_view else None,
+    )
     if not story:
         await safe_edit(
             message,
             "Дело не найдено.",
-            home_inline(message.chat.id),
+            home_inline(viewer_id),
         )
         return
 
-    viewer_id = message.chat.id
     favorite = await db.favorite_state(viewer_id, sid)
     own_story = int(story["author_tg_id"]) == int(viewer_id)
 
@@ -1129,6 +1145,36 @@ async def feed_sort_callback(c: CallbackQuery):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("random:"))
+async def random_case_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        current_index = int(parts[1])
+    except (ValueError, IndexError):
+        current_index = 0
+
+    cat_key = parts[2] if len(parts) > 2 else "all"
+    sort = parts[3] if len(parts) > 3 else "new"
+    cat_key, sort, category = feed_options(cat_key, sort)
+
+    total = await db.feed_count(category=category, sort=sort)
+    if total == 0:
+        await c.answer("По этим фильтрам дел пока нет.", show_alert=True)
+        return
+
+    if total == 1:
+        random_index = 0
+    else:
+        current_index = clamp(current_index, 0, total - 1)
+        random_index = secrets.randbelow(total - 1)
+        if random_index >= current_index:
+            random_index += 1
+
+    await render_feed(c.message, random_index, cat_key, sort)
+    await c.answer("🎲 Случайное дело")
+
+
 @dp.callback_query(F.data.startswith("case:"))
 async def case_callback(c: CallbackQuery):
     await ensure_callback_user(c)
@@ -1725,7 +1771,8 @@ async def help_callback(c: CallbackQuery):
         c.message,
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
         "📝 <b>Подать дело</b> — анонимно рассказать ситуацию.\n"
-        "🏛️ <b>Зал суда</b> — листать дела по одному, фильтровать по категориям и сортировать.\n"
+        "🏛️ <b>Зал суда</b> — компактная лента: короткое превью, фильтры и сортировка.\n"
+        "🎲 Случайное дело — быстрый переход к другой истории.\n"
         "🔥 Можно открыть популярные дела или найти те, где ещё нет советов.\n"
         "💬 <b>Советы</b> — тоже листаются внутри одного сообщения.\n"
         "⚖️ <b>Мои дела</b> — отдельная лента твоих публикаций.\n"
@@ -1804,7 +1851,7 @@ async def menu_help(m: Message):
     await m.answer(
         "ℹ️ <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
         "📝 Подай дело → расскажи ситуацию анонимно.\n"
-        "🏛️ Зал суда → листай дела, выбирай категорию и сортировку.\n"
+        "🏛️ Зал суда → короткие карточки, фильтры, сортировка и 🎲 случайное дело.\n"
         "🔥 Популярные / 🆘 без советов → быстрые режимы ленты.\n"
         "💬 Советы → листай внутри карточки дела.\n"
         "⚖️ Мои дела → следи за своими публикациями.\n"
