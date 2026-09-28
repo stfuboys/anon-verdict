@@ -1099,7 +1099,8 @@ async def render_my_cases(message, user_id, index=0, edit=True):
     story = await db.user_story_item(user_id, index)
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
-        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
+        f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n"
+        f"{story_status_label(story['status'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1141,7 +1142,8 @@ async def render_favorites(message, user_id, index=0, edit=True):
 
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
-        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n\n"
+        f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n"
+        f"{story_status_label(story['status'])}\n\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
