@@ -2191,6 +2191,132 @@ async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("bp:"))
+async def best_answer_page_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        index = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[4] if len(parts) > 4 else "m")
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    await render_best_answer_picker(
+        c.message,
+        c.from_user.id,
+        sid,
+        index,
+        feed_index,
+        back_to,
+        cat_key,
+        sort,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("bc:"))
+async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        comment_id = int(parts[1])
+        sid = int(parts[2])
+        feed_index = int(parts[3])
+    except (ValueError, IndexError):
+        await c.answer("Некорректный ответ", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[4] if len(parts) > 4 else "m")
+    cat_key = parts[5] if len(parts) > 5 else "all"
+    sort = parts[6] if len(parts) > 6 else "new"
+
+    result = await db.close_story_with_best(
+        c.from_user.id,
+        sid,
+        comment_id=comment_id,
+    )
+    status = result.get("status")
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status != "updated":
+        await c.answer("Не удалось завершить дело с этим ответом.", show_alert=True)
+        return
+
+    best_author_tg_id = result.get("best_author_tg_id")
+    if best_author_tg_id and int(best_author_tg_id) != int(c.from_user.id):
+        b = InlineKeyboardBuilder()
+        b.button(text="📖 Открыть дело", callback_data=f"case:{sid}:0:all:new")
+        await safe_notify(
+            best_author_tg_id,
+            "🏆 <b>Автор выбрал твой совет лучшим</b>\n\n"
+            "Дело завершено, а твой ответ отмечен как лучший.",
+            b.as_markup(),
+        )
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("🏆 Лучший ответ выбран. Дело завершено")
+
+
+@dp.callback_query(F.data.startswith("bn:"))
+async def best_answer_none_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = back_to_from_code(parts[3] if len(parts) > 3 else "m")
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+
+    result = await db.close_story_with_best(c.from_user.id, sid)
+    status = result.get("status")
+    if status == "moderated":
+        await c.answer("Дело скрыто модерацией.", show_alert=True)
+        return
+    if status in {"not_found", "deleted"}:
+        await c.answer("Дело недоступно.", show_alert=True)
+        return
+    if status != "updated":
+        await c.answer("Не удалось завершить дело.", show_alert=True)
+        return
+
+    await render_case(
+        c.message,
+        sid,
+        feed_index,
+        back_to=back_to,
+        count_view=False,
+        cat_key=cat_key,
+        sort=sort,
+    )
+    await c.answer("✅ Дело завершено без выбора лучшего ответа")
+
+
 @dp.callback_query(F.data.startswith("life:confirm:"))
 async def lifecycle_confirm_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2244,7 +2370,10 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
         await c.answer("Некорректное действие", show_alert=True)
         return
 
-    result = await db.change_own_story_status(c.from_user.id, sid, target)
+    if action == "c":
+        result = await db.close_story_with_best(c.from_user.id, sid)
+    else:
+        result = await db.change_own_story_status(c.from_user.id, sid, target)
     status = result.get("status")
 
     if status == "moderated":
