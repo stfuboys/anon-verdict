@@ -473,9 +473,11 @@ def case_keyboard(
         )
 
     if story["comments_count"]:
+        advice_index = max(0, int(story["comments_count"]) - 1) if own_story else 0
+        advice_label = "Ответы" if own_story else "Советы"
         b.button(
-            text=f"💬 Советы {story['comments_count']}",
-            callback_data=f"comments:{story['id']}:0:{feed_index}:{cat_key}:{sort}:{back_to}",
+            text=f"💬 {advice_label} {story['comments_count']}",
+            callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
     b.button(
@@ -2043,6 +2045,14 @@ async def comment(m: Message, state: FSMContext):
         callback_data=f"case:{d['sid']}:0:all:new",
     )
 
+    advice_total = await db.comment_count(d["sid"])
+    latest_advice_index = max(0, advice_total - 1)
+    open_answers = InlineKeyboardBuilder()
+    open_answers.button(
+        text=f"💬 Читать ответы · {advice_total}",
+        callback_data=f"comments:{d['sid']}:{latest_advice_index}:0:all:new:my",
+    )
+
     owner_tg_id = result.get("story_owner_tg_id")
     if (
         result.get("story_owner_notifications")
@@ -2053,8 +2063,9 @@ async def comment(m: Message, state: FSMContext):
             owner_tg_id,
             "💬 <b>Новый совет к твоему делу</b>\n\n"
             f"⚖️ {h(result.get('story_title'))}\n"
-            f"🧠 {h(result.get('commenter_nickname'))} оставил новый совет.",
-            open_case.as_markup(),
+            f"🧠 {h(result.get('commenter_nickname'))} оставил новый совет.\n\n"
+            f"Всего ответов: <b>{advice_total}</b>",
+            open_answers.as_markup(),
         )
 
     followers = await db.favorite_subscribers(
