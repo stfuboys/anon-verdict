@@ -510,6 +510,10 @@ def comment_keyboard(
         text=f"👎 {comment['dislikes']}",
         callback_data=f"react:-1:{comment['id']}:{sid}:{index}:{feed_index}:{cat_key}:{sort}",
     )
+    b.button(
+        text="🚩 Жалоба",
+        callback_data=f"report:comment:{comment['id']}:{sid}",
+    )
     prev_i = (index - 1) % total
     next_i = (index + 1) % total
     nav_row(
@@ -522,7 +526,7 @@ def comment_keyboard(
         text="⬅️ К делу",
         callback_data=f"case:{sid}:{feed_index}:{cat_key}:{sort}",
     )
-    b.adjust(2, 3, 1)
+    b.adjust(2, 1, 3, 1)
     return b.as_markup()
 
 
@@ -568,18 +572,29 @@ async def render_profile(message, user_id):
     role = ""
     if u["staff_role"] and u["staff_role"] != "SYSTEM":
         role = f"🛡️ <b>{h(u['staff_role'])}</b>\n"
+
+    notifications_on = bool(u["notifications_enabled"])
+    notif_text = "🔔 Уведомления включены" if notifications_on else "🔕 Уведомления выключены"
+
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Изменить профиль", callback_data="edit")
+    b.button(text="⭐ Избранное", callback_data="favorites:0")
+    b.button(
+        text="🔕 Выключить уведомления" if notifications_on else "🔔 Включить уведомления",
+        callback_data="notifications:toggle",
+    )
     b.button(text="🎖️ Звания", callback_data="ranks")
     b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(1)
+    b.adjust(2, 1, 1, 1)
+
     await safe_edit(
         message,
         f"👤 <b>{h(u['nickname'])}</b>\n"
         f"{role}"
         f"🎖️ {h(u['title'])}\n"
         f"⭐ Репутация: {u['reputation']}\n"
-        f"📈 Уровень: {u['level']}\n\n"
+        f"📈 Уровень: {u['level']}\n"
+        f"{notif_text}\n\n"
         f"📝 {h(u['bio'] or 'Описание пока не добавлено.')}",
         b.as_markup(),
     )
@@ -619,6 +634,59 @@ async def render_my_cases(message, user_id, index=0):
     await safe_edit(message, text, b.as_markup())
 
 
+async def render_favorites(message, user_id, index=0):
+    total = await db.favorite_count(user_id)
+    if total == 0:
+        b = InlineKeyboardBuilder()
+        b.button(text="🏛️ Найти дела", callback_data="feed:0")
+        b.button(text="🏠 Главное меню", callback_data="home")
+        b.adjust(1)
+        await safe_edit(
+            message,
+            "⭐ <b>ИЗБРАННОЕ</b>\n\n"
+            "Здесь будут дела, которые ты сохранил. "
+            "По ним также можно получать уведомления о новых советах.",
+            b.as_markup(),
+        )
+        return
+
+    index = clamp(index, 0, total - 1)
+    story = await db.favorite_item(user_id, index)
+    if not story:
+        await safe_edit(
+            message,
+            "⭐ <b>ИЗБРАННОЕ</b>\n\nСписок изменился. Открой его ещё раз.",
+            home_inline(user_id),
+        )
+        return
+
+    text = (
+        "⭐ <b>ИЗБРАННОЕ</b>\n\n"
+        f"⚖️ <b>Дело №{story['id']}</b>\n"
+        f"🏷️ {h(story['category'])}\n\n"
+        f"<b>{h(story['title'])}</b>\n\n"
+        f"👁 {story['views']} · 💬 {story['comments_count']}\n"
+        f"📄 {index + 1} из {total}"
+    )
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="📖 Открыть",
+        callback_data=f"favcase:{story['id']}:{index}",
+    )
+    prev_i = (index - 1) % total
+    next_i = (index + 1) % total
+    nav_row(
+        b,
+        f"favorites:{prev_i}",
+        f"{index + 1}/{total}",
+        f"favorites:{next_i}",
+    )
+    b.button(text="🏠 Главное меню", callback_data="home")
+    b.adjust(1, 3, 1)
+    await safe_edit(message, text, b.as_markup())
+
+
 async def render_rating(message, page=0):
     total = await db.leaderboard_count()
     if total == 0:
@@ -638,7 +706,8 @@ async def render_rating(message, page=0):
     for i, x in enumerate(rows, offset + 1):
         staff = f" · 🛡️ {h(x['staff_role'])}" if x["staff_role"] else ""
         lines.append(
-            f"<b>{i}.</b> {h(x['nickname'])} — ⭐ {x['reputation']} · {h(x['title'])}{staff}"
+            f"<b>{i}.</b> {h(x['nickname'])} — ⭐ {x['reputation']} · {h(x['title'])}{staff}\n"
+            f"   💬 {x['advice_count']} советов · 👍 {x['helpful_likes']} полезных оценок"
         )
 
     b = InlineKeyboardBuilder()
