@@ -602,6 +602,154 @@ async def render_case(
     )
 
 
+async def render_case_management(
+    message,
+    user_id,
+    sid,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+    ):
+        await safe_edit(message, "Управление этим делом недоступно.", home_inline(user_id))
+        return
+
+    status = story["status"]
+    b = InlineKeyboardBuilder()
+
+    if status == "open":
+        b.button(
+            text="✅ Завершить дело",
+            callback_data=f"life:confirm:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="🗑 Удалить дело",
+            callback_data=f"life:confirm:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        info = (
+            "🟢 Сейчас дело открыто.\n"
+            "Пользователи могут оставлять новые советы и писать в обсуждении."
+        )
+    elif status == "closed":
+        b.button(
+            text="🔓 Возобновить дело",
+            callback_data=f"life:do:o:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        b.button(
+            text="🗑 Удалить дело",
+            callback_data=f"life:confirm:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        info = (
+            "✅ Дело завершено.\n"
+            "Старые советы и обсуждение доступны для чтения, "
+            "но новые сообщения и советы закрыты."
+        )
+    elif status == "hidden":
+        b.button(text="⬅️ Мои дела", callback_data=f"my:{feed_index}")
+        await safe_edit(
+            message,
+            "🙈 <b>ДЕЛО СКРЫТО МОДЕРАЦИЕЙ</b>\n\n"
+            "Изменить его статус самостоятельно нельзя.",
+            b.as_markup(),
+        )
+        return
+    else:
+        b.button(text="⚖️ Мои дела", callback_data="my:0")
+        await safe_edit(
+            message,
+            "🗑 <b>ДЕЛО УДАЛЕНО</b>\n\nОно больше недоступно.",
+            b.as_markup(),
+        )
+        return
+
+    b.button(
+        text="⬅️ К делу",
+        callback_data=f"caseback:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+
+    await safe_edit(
+        message,
+        f"⚙️ <b>УПРАВЛЕНИЕ ДЕЛОМ №{sid}</b>\n\n"
+        f"{info}\n\n"
+        "Завершение можно отменить позже. Удаление — окончательное.",
+        b.as_markup(),
+    )
+
+
+async def render_lifecycle_confirmation(
+    message,
+    user_id,
+    action,
+    sid,
+    feed_index=0,
+    back_to="my",
+    cat_key="all",
+    sort="new",
+):
+    story = await db.story(sid)
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(user_id)
+    ):
+        await safe_edit(message, "Управление этим делом недоступно.", home_inline(user_id))
+        return
+
+    b = InlineKeyboardBuilder()
+    if action == "c":
+        if story["status"] != "open":
+            await render_case_management(
+                message, user_id, sid, feed_index, back_to, cat_key, sort
+            )
+            return
+        b.button(
+            text="✅ Да, завершить",
+            callback_data=f"life:do:c:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "✅ <b>ЗАВЕРШИТЬ ДЕЛО?</b>"
+        body = (
+            "Оно исчезнет из активного Зала суда.\n"
+            "Новые советы и сообщения обсуждения будут закрыты.\n"
+            "Старые ответы останутся доступными для чтения.\n\n"
+            "Позже дело можно будет возобновить."
+        )
+    elif action == "d":
+        if story["status"] not in {"open", "closed"}:
+            await render_case_management(
+                message, user_id, sid, feed_index, back_to, cat_key, sort
+            )
+            return
+        b.button(
+            text="🗑 Да, удалить",
+            callback_data=f"life:do:d:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+        title = "🗑 <b>УДАЛИТЬ ДЕЛО?</b>"
+        body = (
+            "Дело исчезнет из твоего списка и станет недоступно другим.\n"
+            "Опубликованные ранее советы, реакции и репутация пользователей сохранятся.\n\n"
+            "<b>Отменить удаление нельзя.</b>"
+        )
+    else:
+        await render_case_management(
+            message, user_id, sid, feed_index, back_to, cat_key, sort
+        )
+        return
+
+    b.button(
+        text="⬅️ Не менять",
+        callback_data=f"life:menu:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    b.adjust(1)
+    await safe_edit(message, f"{title}\n\n{body}", b.as_markup())
+
+
 def comment_text(comment, index, total):
     role = ""
     if comment["staff_role"] and comment["staff_role"] != "SYSTEM":
