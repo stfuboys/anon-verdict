@@ -1503,16 +1503,54 @@ async def mycase_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
-@dp.callback_query(F.data == "cancelinput")
+@dp.callback_query(F.data.startswith("cancelinput:"))
 async def cancel_input_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
-    b = InlineKeyboardBuilder()
-    b.button(text="🏛️ В Зал суда", callback_data="feed:0")
-    await safe_edit(
-        c.message,
-        "❌ <b>Ввод отменён.</b>",
-        b.as_markup(),
-    )
+    parts = c.data.split(":")
+    target = parts[1] if len(parts) > 1 else "feed"
+
+    if target == "case" and len(parts) >= 7:
+        try:
+            sid = int(parts[2])
+            feed_index = int(parts[3])
+        except ValueError:
+            await c.answer("Ввод отменён")
+            return
+        back_to = parts[4]
+        cat_key = parts[5]
+        sort = parts[6]
+        await render_case(
+            c.message,
+            sid,
+            feed_index,
+            back_to=back_to,
+            count_view=False,
+            cat_key=cat_key,
+            sort=sort,
+        )
+    elif target == "discuss" and len(parts) >= 8:
+        try:
+            sid = int(parts[2])
+            offset = int(parts[3])
+            feed_index = int(parts[4])
+        except ValueError:
+            await c.answer("Ввод отменён")
+            return
+        cat_key = parts[5]
+        sort = parts[6]
+        back_to = parts[7]
+        await render_discussion(
+            c.message,
+            sid,
+            offset,
+            feed_index,
+            cat_key,
+            sort,
+            back_to,
+        )
+    else:
+        await render_feed(c.message, 0)
+
     await c.answer("Ввод отменён")
 
 
@@ -1595,7 +1633,10 @@ async def discussion_write_callback(c: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Discussion.body)
     cancel = InlineKeyboardBuilder()
-    cancel.button(text="❌ Отменить", callback_data="cancelinput")
+    cancel.button(
+        text="❌ Отменить",
+        callback_data=f"cancelinput:discuss:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
     await c.message.answer(
         "🗣 <b>Новое сообщение</b>\n\n"
         "Напиши вопрос, уточнение или мнение.",
@@ -1651,7 +1692,10 @@ async def discussion_reply_callback(c: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Discussion.body)
     cancel = InlineKeyboardBuilder()
-    cancel.button(text="❌ Отменить", callback_data="cancelinput")
+    cancel.button(
+        text="❌ Отменить",
+        callback_data=f"cancelinput:discuss:{sid}:{offset}:{feed_index}:{cat_key}:{sort}:{back_to}",
+    )
     await c.message.answer(
         "↩️ <b>Ответ на сообщение</b>\n"
         f"<i>{h(quote)}</i>\n\n"
@@ -1840,7 +1884,8 @@ async def comments_callback(c: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data.startswith("react:"))
-async def react_callback(c: CallbackQuery):
+async def react_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
     await ensure_callback_user(c)
     parts = c.data.split(":")
     try:
@@ -1945,7 +1990,10 @@ async def advice_start(c: CallbackQuery, state: FSMContext):
     )
     await state.set_state(Comment.body)
     cancel = InlineKeyboardBuilder()
-    cancel.button(text="❌ Отменить", callback_data="cancelinput")
+    cancel.button(
+        text="❌ Отменить",
+        callback_data=f"cancelinput:case:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
     await c.message.answer(
         "💬 <b>Твой совет</b>\n\n"
         "Напиши конкретно, что бы ты сделал на месте автора и почему.",
