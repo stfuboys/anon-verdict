@@ -548,9 +548,10 @@ def case_keyboard(
             callback_data=f"comments:{story['id']}:{advice_index}:{feed_index}:{cat_key}:{sort}:{back_to}",
         )
 
-    if not story["is_demo"]:
+    update_count = int(story["update_count"] or 0)
+    if not story["is_demo"] and update_count > 1:
         b.button(
-            text="📝 Обновления",
+            text=f"📚 История · {update_count}",
             callback_data=f"updates:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
@@ -1222,7 +1223,8 @@ async def render_my_cases(message, user_id, index=0, edit=True):
     text = (
         f"⚖️ <b>МОИ ДЕЛА</b>\n\n"
         f"<b>Дело №{story['id']}</b> · {h(story['category'])}\n"
-        f"{story_status_label(story['status'])}\n\n"
+        f"{story_status_label(story['status'])}\n"
+        f"{('📝 Обновлений: ' + str(story['update_count'])) if int(story['update_count'] or 0) else ''}\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1265,7 +1267,8 @@ async def render_favorites(message, user_id, index=0, edit=True):
     text = (
         "⭐ <b>ИЗБРАННОЕ</b>\n\n"
         f"⚖️ <b>Дело №{story['id']}</b> · {h(story['category'])}\n"
-        f"{story_status_label(story['status'])}\n\n"
+        f"{story_status_label(story['status'])}\n"
+        f"{('📝 Обновлений: ' + str(story['update_count'])) if int(story['update_count'] or 0) else ''}\n"
         f"<b>{h(story['title'])}</b>\n\n"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}\n"
@@ -1957,8 +1960,8 @@ async def story_update_message(m: Message, state: FSMContext):
     if followers:
         b = InlineKeyboardBuilder()
         b.button(
-            text="📝 Читать обновление",
-            callback_data=f"updates:{sid}:0:feed:all:new",
+            text="📖 Открыть дело",
+            callback_data=f"case:{sid}:0:all:new",
         )
         asyncio.create_task(
             notify_many(
