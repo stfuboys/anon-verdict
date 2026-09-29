@@ -2350,6 +2350,37 @@ async def story_outcome_message(m: Message, state: FSMContext):
     )
 
 
+async def notify_case_completed(sid, owner_tg_id, best_author_tg_id=None):
+    story = await db.story(sid)
+    if not story:
+        return
+
+    exclude = [owner_tg_id]
+    if best_author_tg_id:
+        exclude.append(best_author_tg_id)
+
+    participants = await db.story_participant_subscribers(
+        sid,
+        exclude_tg_ids=exclude,
+    )
+    if not participants:
+        return
+
+    b = InlineKeyboardBuilder()
+    b.button(text="⚖️ Посмотреть итог", callback_data=f"case:{sid}:0:all:new")
+    best_line = "\n🏆 Автор выбрал лучший ответ." if story["best_comment_id"] else ""
+    asyncio.create_task(
+        notify_many(
+            participants,
+            "✅ <b>ДЕЛО ЗАВЕРШЕНО</b>\n\n"
+            f"⚖️ {h(story['title'])}"
+            f"{best_line}\n\n"
+            "Посмотри результат дела.",
+            b.as_markup(),
+        )
+    )
+
+
 @dp.callback_query(F.data.startswith("bp:"))
 async def best_answer_page_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2430,6 +2461,11 @@ async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
             b.as_markup(),
         )
 
+    await notify_case_completed(
+        sid,
+        c.from_user.id,
+        best_author_tg_id=best_author_tg_id,
+    )
     await render_case(
         c.message,
         sid,
@@ -2470,6 +2506,7 @@ async def best_answer_none_callback(c: CallbackQuery, state: FSMContext):
         await c.answer("Не удалось завершить дело.", show_alert=True)
         return
 
+    await notify_case_completed(sid, c.from_user.id)
     await render_case(
         c.message,
         sid,
@@ -2575,6 +2612,9 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
         )
         await c.answer("Дело удалено")
         return
+
+    if target == "closed" and status == "updated":
+        await notify_case_completed(sid, c.from_user.id)
 
     await render_case(
         c.message,
