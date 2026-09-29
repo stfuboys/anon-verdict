@@ -165,6 +165,8 @@ class DB:
             await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
             await self._ensure_column(db, "stories", "reopened_at", "TEXT DEFAULT ''")
             await self._ensure_column(db, "stories", "best_comment_id", "INTEGER")
+            await self._ensure_column(db, "stories", "outcome_body", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "stories", "outcome_created_at", "TEXT DEFAULT ''")
             await self._ensure_column(db, "comments", "status", "TEXT DEFAULT 'open'")
 
             await db.executescript(
@@ -453,7 +455,17 @@ class DB:
                           AND c2.status='open'
                           AND r.value=1
                           AND r.user_id != u.id
-                    ) AS helpful_likes
+                    ) AS helpful_likes,
+                    (
+                        SELECT COUNT(*)
+                        FROM stories s3
+                        JOIN comments c3 ON c3.id=s3.best_comment_id
+                        WHERE c3.author_id=u.id
+                          AND s3.best_comment_id IS NOT NULL
+                          AND s3.status!='deleted'
+                    ) AS best_answers,
+                    (SELECT COUNT(*) FROM stories s4
+                     WHERE s4.author_id=u.id AND s4.is_demo=0 AND s4.status='closed') AS closed_stories
                 FROM users u
                 WHERE u.tg_id=?
                 """,
@@ -544,9 +556,14 @@ class DB:
                     (SELECT COUNT(*) FROM discussion_messages d WHERE d.story_id=s.id AND d.status='open') AS discussion_count,
                     (SELECT COUNT(*) FROM story_updates su WHERE su.story_id=s.id) AS update_count,
                     (SELECT su.body FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_body,
-                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at
+                    (SELECT su.created_at FROM story_updates su WHERE su.story_id=s.id ORDER BY su.created_at DESC, su.id DESC LIMIT 1) AS latest_update_created_at,
+                    bc.body AS best_comment_body,
+                    bu.nickname AS best_comment_nickname,
+                    bu.title AS best_comment_title
                 FROM stories s
                 JOIN users u ON u.id=s.author_id
+                LEFT JOIN comments bc ON bc.id=s.best_comment_id AND bc.status='open'
+                LEFT JOIN users bu ON bu.id=bc.author_id
                 WHERE s.id=?
                 """,
                 (sid,),
@@ -1658,6 +1675,53 @@ class DB:
                 (sid,),
             )
             return await cur.fetchone()
+
+    async def set_story_outcome(self, tg_id, sid, body):
+        body = (body or "").strip()
+        if len(body) < 10:
+            return {"status": "too_short"}
+
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                UPDATE stories
+                SET outcome_body=?, outcome_created_at=?
+                WHERE id=?
+                  AND is_demo=0
+                  AND status='closed'
+                  AND author_id=(SELECT id FROM users WHERE tg_id=?)
+                """,
+                (body[:2000], now(), sid, tg_id),
+            )
+            await db.commit()
+            return {"status": "updated" if cur.rowcount else "unavailable"}
+
+    async def story_participant_subscribers(self, sid, exclude_tg_ids=None):
+        exclude_tg_ids = set(int(x) for x in (exclude_tg_ids or []) if x)
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                """
+                SELECT DISTINCT u.tg_id
+                FROM users u
+                WHERE u.notifications_enabled=1
+                  AND (
+                    u.id IN (
+                      SELECT c.author_id FROM comments c
+                      WHERE c.story_id=? AND c.status='open'
+                    )
+                    OR u.id IN (
+                      SELECT d.author_id FROM discussion_messages d
+                      WHERE d.story_id=? AND d.status='open'
+                    )
+                    OR u.id IN (
+                      SELECT f.user_id FROM favorites f WHERE f.story_id=?
+                    )
+                  )
+                """,
+                (sid, sid, sid),
+            )
+            rows = await cur.fetchall()
+            return [row[0] for row in rows if int(row[0]) not in exclude_tg_ids]
 
     async def close_story_with_best(self, tg_id, sid, comment_id=None):
         async with aiosqlite.connect(self.path) as db:
