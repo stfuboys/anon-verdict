@@ -118,6 +118,10 @@ class StoryUpdate(StatesGroup):
     body = State()
 
 
+class StoryOutcome(StatesGroup):
+    body = State()
+
+
 class Admin(StatesGroup):
     user_lookup = State()
 
@@ -564,7 +568,26 @@ def case_text(story):
         )
         content = reopen_prefix + h(body)
 
-    best_note = "🏆 Лучший ответ выбран автором\n\n" if story["best_comment_id"] else ""
+    best_note = ""
+    if story["best_comment_id"] and story["best_comment_body"]:
+        best_body = str(story["best_comment_body"]).strip()
+        best_preview = best_body[:700] + ("…" if len(best_body) > 700 else "")
+        best_note = (
+            "────────────\n"
+            "🏆 <b>ЛУЧШИЙ ОТВЕТ</b>\n"
+            f"<b>{h(story['best_comment_nickname'])}</b> · {h(story['best_comment_title'])}\n"
+            f"{h(best_preview)}\n\n"
+        )
+
+    outcome_note = ""
+    if story["status"] == "closed" and story["outcome_body"]:
+        outcome_body = str(story["outcome_body"]).strip()
+        outcome_preview = outcome_body[:900] + ("…" if len(outcome_body) > 900 else "")
+        outcome_note = (
+            "────────────\n"
+            "🎬 <b>ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ</b>\n"
+            f"{h(outcome_preview)}\n\n"
+        )
 
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
@@ -572,6 +595,7 @@ def case_text(story):
         f"<b>{h(story['title'])}</b>\n\n"
         f"{content}\n\n"
         f"{best_note}"
+        f"{outcome_note}"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -616,6 +640,12 @@ def case_keyboard(
         b.button(
             text=f"📚 История · {update_count}",
             callback_data=f"updates:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+
+    if own_story and not story["is_demo"] and status == "closed":
+        b.button(
+            text="✍️ Изменить итог" if story["outcome_body"] else "🎬 Чем всё закончилось?",
+            callback_data=f"outcome:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
     if own_story and not story["is_demo"] and status in {"open", "closed"}:
@@ -786,6 +816,10 @@ async def render_case_management(
             "Пользователи могут оставлять новые советы и писать в обсуждении."
         )
     elif status == "closed":
+        b.button(
+            text="✍️ Изменить итог" if story["outcome_body"] else "🎬 Чем всё закончилось?",
+            callback_data=f"outcome:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
         b.button(
             text="🔓 Возобновить дело",
             callback_data=f"life:do:o:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
@@ -1361,8 +1395,10 @@ async def render_profile(message, user_id, edit=True):
         f"🎖️ {h(u['title'])} · ⭐ <b>{u['reputation']}</b>\n"
         f"{progress_line}\n\n"
         f"⚖️ Дел: <b>{stats['stories_count'] if stats else 0}</b> · "
+        f"✅ Завершено: <b>{stats['closed_stories'] if stats else 0}</b>\n"
         f"💬 Советов: <b>{stats['advice_count'] if stats else 0}</b> · "
-        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b>\n"
+        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b> · "
+        f"🏆 Лучших: <b>{stats['best_answers'] if stats else 0}</b>\n"
         f"{notif_text}\n\n"
         f"📝 {h(u['bio'] or 'Описание пока не добавлено.')}",
         b.as_markup(),
@@ -2191,6 +2227,160 @@ async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("outcome:"))
+async def story_outcome_start_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[3] if len(parts) > 3 else "my"
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+    story = await db.story(sid)
+
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(c.from_user.id)
+        or story["status"] != "closed"
+    ):
+        await c.answer("Итог можно добавить только к своему завершённому делу.", show_alert=True)
+        return
+
+    payload = {
+        "sid": sid,
+        "feed_index": feed_index,
+        "back_to": back_to,
+        "cat_key": cat_key,
+        "sort": sort,
+    }
+    await db.set_pending_input(c.from_user.id, "story_outcome", payload)
+    await state.set_state(StoryOutcome.body)
+    await state.update_data(**payload)
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="✖️ Отмена",
+        callback_data=f"cancelinput:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    await c.message.answer(
+        "🎬 <b>ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ?</b>\n\n"
+        "Коротко расскажи итог ситуации: что произошло после советов и чем всё закончилось.\n"
+        "Минимум 10 символов. Итог будет виден прямо в завершённом деле.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+    await c.answer()
+
+
+@dp.message(StoryOutcome.body)
+async def story_outcome_message(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
+
+    body, reasons = moderate(m.text or "")
+    body = body.strip()
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы.")
+        return
+    if len(body) < 10:
+        await m.answer(f"✍️ Слишком коротко: {len(body)}/10. Добавь ещё немного деталей.")
+        return
+
+    data = await state.get_data()
+    if not data.get("sid"):
+        pending = await db.pending_input(m.from_user.id)
+        if pending and pending.get("action") == "story_outcome":
+            data = pending.get("payload") or {}
+
+    sid = data.get("sid")
+    if not sid:
+        await state.clear()
+        await db.clear_pending_input(m.from_user.id)
+        await m.answer("Не удалось определить дело. Открой завершённое дело и добавь итог ещё раз.")
+        return
+
+    result = await db.set_story_outcome(m.from_user.id, sid, body)
+    await state.clear()
+    await db.clear_pending_input(m.from_user.id)
+
+    if result.get("status") != "updated":
+        await m.answer("Не удалось сохранить итог. Убедись, что дело завершено.")
+        return
+
+    participants = await db.story_participant_subscribers(
+        sid,
+        exclude_tg_ids=[m.from_user.id],
+    )
+    if participants:
+        story = await db.story(sid)
+        b = InlineKeyboardBuilder()
+        b.button(text="🎬 Читать итог", callback_data=f"case:{sid}:0:all:new")
+        asyncio.create_task(
+            notify_many(
+                participants,
+                "🎬 <b>АВТОР РАССКАЗАЛ, ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ</b>\n\n"
+                f"⚖️ {h(story['title'])}\n"
+                f"{h(body[:350])}{'…' if len(body) > 350 else ''}",
+                b.as_markup(),
+            )
+        )
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="📖 Посмотреть итог дела",
+        callback_data=(
+            f"caseback:{sid}:{data.get('feed_index', 0)}:"
+            f"{data.get('back_to', 'my')}:{data.get('cat_key', 'all')}:"
+            f"{data.get('sort', 'new')}"
+        ),
+    )
+    await m.answer(
+        "✅ <b>Итог добавлен.</b> Теперь завершённое дело показывает, чем всё закончилось.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+
+
+async def notify_case_completed(sid, owner_tg_id, best_author_tg_id=None):
+    story = await db.story(sid)
+    if not story:
+        return
+
+    exclude = [owner_tg_id]
+    if best_author_tg_id:
+        exclude.append(best_author_tg_id)
+
+    participants = await db.story_participant_subscribers(
+        sid,
+        exclude_tg_ids=exclude,
+    )
+    if not participants:
+        return
+
+    b = InlineKeyboardBuilder()
+    b.button(text="⚖️ Посмотреть итог", callback_data=f"case:{sid}:0:all:new")
+    best_line = "\n🏆 Автор выбрал лучший ответ." if story["best_comment_id"] else ""
+    asyncio.create_task(
+        notify_many(
+            participants,
+            "✅ <b>ДЕЛО ЗАВЕРШЕНО</b>\n\n"
+            f"⚖️ {h(story['title'])}"
+            f"{best_line}\n\n"
+            "Посмотри результат дела.",
+            b.as_markup(),
+        )
+    )
+
+
 @dp.callback_query(F.data.startswith("bp:"))
 async def best_answer_page_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -2271,6 +2461,11 @@ async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
             b.as_markup(),
         )
 
+    await notify_case_completed(
+        sid,
+        c.from_user.id,
+        best_author_tg_id=best_author_tg_id,
+    )
     await render_case(
         c.message,
         sid,
@@ -2311,6 +2506,7 @@ async def best_answer_none_callback(c: CallbackQuery, state: FSMContext):
         await c.answer("Не удалось завершить дело.", show_alert=True)
         return
 
+    await notify_case_completed(sid, c.from_user.id)
     await render_case(
         c.message,
         sid,
@@ -2416,6 +2612,9 @@ async def lifecycle_action_callback(c: CallbackQuery, state: FSMContext):
         )
         await c.answer("Дело удалено")
         return
+
+    if target == "closed" and status == "updated":
+        await notify_case_completed(sid, c.from_user.id)
 
     await render_case(
         c.message,
@@ -3997,6 +4196,12 @@ async def pending_text_fallback(m: Message, state: FSMContext):
 
     action = pending.get("action")
     payload = pending.get("payload") or {}
+
+    if action == "story_outcome":
+        await state.set_state(StoryOutcome.body)
+        await state.update_data(**payload)
+        await story_outcome_message(m, state)
+        return
 
     if action == "story_update":
         await state.set_state(StoryUpdate.body)

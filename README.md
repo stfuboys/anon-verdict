@@ -135,3 +135,13 @@ Case authors can manage the lifecycle of their own real cases.
 - selected advice is marked as the author's best answer in normal advice browsing
 - best-answer selection is validated against the same case before closing
 - stale direct-close buttons cannot bypass the best-answer picker when replies exist
+
+
+## Case outcome v15
+
+- completed cases show the selected best advice directly in the case card
+- case authors can add or edit a final “what happened” outcome after completion
+- outcome input survives in-memory FSM loss through the persistent pending-input route
+- advisers, discussion participants, and followers can be notified when a case is completed or receives a final outcome
+- the selected best-answer author keeps the dedicated +5 reputation notification and is excluded from the generic completion notification
+- profiles show completed-case and best-answer counts
