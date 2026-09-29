@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, SwitchInlineQueryChosenChat
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from db import DB
@@ -128,6 +128,32 @@ class Admin(StatesGroup):
 
 def h(value):
     return html.escape(str(value or ""), quote=False)
+
+
+def case_deep_link(sid):
+    return f"https://t.me/AnonVerdictBot?start=case_{int(sid)}"
+
+
+def parse_start_payload(text):
+    parts = (text or "").strip().split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+    if not payload:
+        return {"source": "", "campaign": "", "case_id": None}
+
+    if payload.startswith("case_"):
+        try:
+            return {"source": "share", "campaign": "", "case_id": int(payload[5:])}
+        except ValueError:
+            return {"source": "", "campaign": "", "case_id": None}
+
+    # Advertising payload: src_<source>_<campaign>, e.g. src_tiktok_video01.
+    if payload.startswith("src_"):
+        bits = payload[4:].split("_", 1)
+        source = bits[0][:32] if bits else ""
+        campaign = bits[1][:64] if len(bits) > 1 else ""
+        return {"source": source, "campaign": campaign, "case_id": None}
+
+    return {"source": "", "campaign": "", "case_id": None}
 
 
 def clamp(value, low, high):
@@ -622,6 +648,10 @@ def case_keyboard(
         )
 
     if not story["is_demo"]:
+        b.button(
+            text="📤 Поделиться",
+            callback_data=f"share:{story['id']}",
+        )
         b.button(
             text="🗣 Обсудить" if status == "open" else "🗣 Обсуждение",
             callback_data=f"discuss:{story['id']}:latest:{feed_index}:{cat_key}:{sort}:{back_to}",
@@ -1810,12 +1840,88 @@ async def render_admin_story(message, sid, page=0):
 @dp.message(CommandStart())
 async def start(m: Message):
     await ensure_message_user(m)
+    payload = parse_start_payload(m.text)
+    await db.record_acquisition(
+        m.from_user.id,
+        source=payload["source"],
+        campaign=payload["campaign"],
+        case_id=payload["case_id"],
+    )
+
+    if payload["case_id"]:
+        story = await db.story(
+            payload["case_id"],
+            view=True,
+            viewer_tg_id=m.from_user.id,
+        )
+        if story and story["status"] in {"open", "closed"} and not story["is_demo"]:
+            own_story = int(story["author_tg_id"]) == int(m.from_user.id)
+            favorite = await db.is_favorite(m.from_user.id, story["id"])
+            await m.answer(
+                "👋 <b>Тебя пригласили разобрать реальную ситуацию.</b>\n"
+                "Прочитай дело и оставь свой взгляд — автор останется анонимным.",
+                parse_mode="HTML",
+                reply_markup=main_keyboard(m.from_user.id),
+            )
+            await m.answer(
+                case_text(story),
+                parse_mode="HTML",
+                reply_markup=case_keyboard(
+                    story,
+                    feed_index=0,
+                    back_to="feed",
+                    favorite=favorite,
+                    own_story=own_story,
+                ),
+            )
+            return
+
     u = await db.get_user(m.from_user.id)
     await m.answer(
         home_text(u),
         parse_mode="HTML",
         reply_markup=main_keyboard(m.from_user.id),
     )
+
+
+@dp.callback_query(F.data.startswith("share:"))
+async def share_case_callback(c: CallbackQuery):
+    await ensure_callback_user(c)
+    try:
+        sid = int(c.data.split(":")[1])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    story = await db.story(sid)
+    if not story or story["is_demo"] or story["status"] not in {"open", "closed"}:
+        await c.answer("Этим делом нельзя поделиться.", show_alert=True)
+        return
+
+    link = case_deep_link(sid)
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="📨 Отправить в Telegram",
+        switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+            query=f"⚖️ Разбери анонимную ситуацию: {link}",
+            allow_user_chats=True,
+            allow_group_chats=True,
+            allow_channel_chats=True,
+            allow_bot_chats=False,
+        ),
+    )
+    b.button(text="⬅️ К делу", callback_data=f"case:{sid}:0:all:new")
+    b.adjust(1)
+
+    await c.message.answer(
+        "📤 <b>ПОДЕЛИТЬСЯ ДЕЛОМ</b>\n\n"
+        "Отправь ссылку друзьям или в чат. После запуска Anon Verdict человек "
+        "сразу увидит именно это дело.\n\n"
+        f"<code>{h(link)}</code>",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+    await c.answer()
 
 
 @dp.callback_query(F.data == "noop")
