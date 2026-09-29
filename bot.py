@@ -118,6 +118,10 @@ class StoryUpdate(StatesGroup):
     body = State()
 
 
+class StoryOutcome(StatesGroup):
+    body = State()
+
+
 class Admin(StatesGroup):
     user_lookup = State()
 
@@ -564,7 +568,26 @@ def case_text(story):
         )
         content = reopen_prefix + h(body)
 
-    best_note = "🏆 Лучший ответ выбран автором\n\n" if story["best_comment_id"] else ""
+    best_note = ""
+    if story["best_comment_id"] and story["best_comment_body"]:
+        best_body = str(story["best_comment_body"]).strip()
+        best_preview = best_body[:700] + ("…" if len(best_body) > 700 else "")
+        best_note = (
+            "────────────\n"
+            "🏆 <b>ЛУЧШИЙ ОТВЕТ</b>\n"
+            f"<b>{h(story['best_comment_nickname'])}</b> · {h(story['best_comment_title'])}\n"
+            f"{h(best_preview)}\n\n"
+        )
+
+    outcome_note = ""
+    if story["status"] == "closed" and story["outcome_body"]:
+        outcome_body = str(story["outcome_body"]).strip()
+        outcome_preview = outcome_body[:900] + ("…" if len(outcome_body) > 900 else "")
+        outcome_note = (
+            "────────────\n"
+            "🎬 <b>ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ</b>\n"
+            f"{h(outcome_preview)}\n\n"
+        )
 
     return (
         f"⚖️ <b>Дело №{story['id']}</b>\n"
@@ -572,6 +595,7 @@ def case_text(story):
         f"<b>{h(story['title'])}</b>\n\n"
         f"{content}\n\n"
         f"{best_note}"
+        f"{outcome_note}"
         f"👁 {story['views']} · 💬 {story['comments_count']} · "
         f"🗣 {story['discussion_count']} · ⭐ {story['favorites_count']}"
         f"{demo_note}"
@@ -616,6 +640,12 @@ def case_keyboard(
         b.button(
             text=f"📚 История · {update_count}",
             callback_data=f"updates:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
+
+    if own_story and not story["is_demo"] and status == "closed":
+        b.button(
+            text="✍️ Изменить итог" if story["outcome_body"] else "🎬 Чем всё закончилось?",
+            callback_data=f"outcome:{story['id']}:{feed_index}:{back_to}:{cat_key}:{sort}",
         )
 
     if own_story and not story["is_demo"] and status in {"open", "closed"}:
@@ -786,6 +816,10 @@ async def render_case_management(
             "Пользователи могут оставлять новые советы и писать в обсуждении."
         )
     elif status == "closed":
+        b.button(
+            text="✍️ Изменить итог" if story["outcome_body"] else "🎬 Чем всё закончилось?",
+            callback_data=f"outcome:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+        )
         b.button(
             text="🔓 Возобновить дело",
             callback_data=f"life:do:o:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
@@ -1361,8 +1395,10 @@ async def render_profile(message, user_id, edit=True):
         f"🎖️ {h(u['title'])} · ⭐ <b>{u['reputation']}</b>\n"
         f"{progress_line}\n\n"
         f"⚖️ Дел: <b>{stats['stories_count'] if stats else 0}</b> · "
+        f"✅ Завершено: <b>{stats['closed_stories'] if stats else 0}</b>\n"
         f"💬 Советов: <b>{stats['advice_count'] if stats else 0}</b> · "
-        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b>\n"
+        f"👍 Полезных: <b>{stats['helpful_likes'] if stats else 0}</b> · "
+        f"🏆 Лучших: <b>{stats['best_answers'] if stats else 0}</b>\n"
         f"{notif_text}\n\n"
         f"📝 {h(u['bio'] or 'Описание пока не добавлено.')}",
         b.as_markup(),
