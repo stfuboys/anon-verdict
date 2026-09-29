@@ -2227,6 +2227,129 @@ async def lifecycle_menu_callback(c: CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+@dp.callback_query(F.data.startswith("outcome:"))
+async def story_outcome_start_callback(c: CallbackQuery, state: FSMContext):
+    await ensure_callback_user(c)
+    parts = c.data.split(":")
+    try:
+        sid = int(parts[1])
+        feed_index = int(parts[2])
+    except (ValueError, IndexError):
+        await c.answer("Некорректное дело", show_alert=True)
+        return
+
+    back_to = parts[3] if len(parts) > 3 else "my"
+    cat_key = parts[4] if len(parts) > 4 else "all"
+    sort = parts[5] if len(parts) > 5 else "new"
+    story = await db.story(sid)
+
+    if (
+        not story
+        or story["is_demo"]
+        or int(story["author_tg_id"]) != int(c.from_user.id)
+        or story["status"] != "closed"
+    ):
+        await c.answer("Итог можно добавить только к своему завершённому делу.", show_alert=True)
+        return
+
+    payload = {
+        "sid": sid,
+        "feed_index": feed_index,
+        "back_to": back_to,
+        "cat_key": cat_key,
+        "sort": sort,
+    }
+    await db.set_pending_input(c.from_user.id, "story_outcome", payload)
+    await state.set_state(StoryOutcome.body)
+    await state.update_data(**payload)
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="✖️ Отмена",
+        callback_data=f"cancelinput:{sid}:{feed_index}:{back_to}:{cat_key}:{sort}",
+    )
+    await c.message.answer(
+        "🎬 <b>ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ?</b>\n\n"
+        "Коротко расскажи итог ситуации: что произошло после советов и чем всё закончилось.\n"
+        "Минимум 10 символов. Итог будет виден прямо в завершённом деле.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+    await c.answer()
+
+
+@dp.message(StoryOutcome.body)
+async def story_outcome_message(m: Message, state: FSMContext):
+    await ensure_message_user(m)
+    if (m.text or "") in PRIMARY_NAV_TEXTS:
+        await state.clear()
+        await route_primary_navigation(m)
+        return
+
+    body, reasons = moderate(m.text or "")
+    body = body.strip()
+    if reasons:
+        await m.answer("Удали персональные данные или угрозы.")
+        return
+    if len(body) < 10:
+        await m.answer(f"✍️ Слишком коротко: {len(body)}/10. Добавь ещё немного деталей.")
+        return
+
+    data = await state.get_data()
+    if not data.get("sid"):
+        pending = await db.pending_input(m.from_user.id)
+        if pending and pending.get("action") == "story_outcome":
+            data = pending.get("payload") or {}
+
+    sid = data.get("sid")
+    if not sid:
+        await state.clear()
+        await db.clear_pending_input(m.from_user.id)
+        await m.answer("Не удалось определить дело. Открой завершённое дело и добавь итог ещё раз.")
+        return
+
+    result = await db.set_story_outcome(m.from_user.id, sid, body)
+    await state.clear()
+    await db.clear_pending_input(m.from_user.id)
+
+    if result.get("status") != "updated":
+        await m.answer("Не удалось сохранить итог. Убедись, что дело завершено.")
+        return
+
+    participants = await db.story_participant_subscribers(
+        sid,
+        exclude_tg_ids=[m.from_user.id],
+    )
+    if participants:
+        story = await db.story(sid)
+        b = InlineKeyboardBuilder()
+        b.button(text="🎬 Читать итог", callback_data=f"case:{sid}:0:all:new")
+        asyncio.create_task(
+            notify_many(
+                participants,
+                "🎬 <b>АВТОР РАССКАЗАЛ, ЧЕМ ВСЁ ЗАКОНЧИЛОСЬ</b>\n\n"
+                f"⚖️ {h(story['title'])}\n"
+                f"{h(body[:350])}{'…' if len(body) > 350 else ''}",
+                b.as_markup(),
+            )
+        )
+
+    b = InlineKeyboardBuilder()
+    b.button(
+        text="📖 Посмотреть итог дела",
+        callback_data=(
+            f"caseback:{sid}:{data.get('feed_index', 0)}:"
+            f"{data.get('back_to', 'my')}:{data.get('cat_key', 'all')}:"
+            f"{data.get('sort', 'new')}"
+        ),
+    )
+    await m.answer(
+        "✅ <b>Итог добавлен.</b> Теперь завершённое дело показывает, чем всё закончилось.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup(),
+    )
+
+
 @dp.callback_query(F.data.startswith("bp:"))
 async def best_answer_page_callback(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -4033,6 +4156,12 @@ async def pending_text_fallback(m: Message, state: FSMContext):
 
     action = pending.get("action")
     payload = pending.get("payload") or {}
+
+    if action == "story_outcome":
+        await state.set_state(StoryOutcome.body)
+        await state.update_data(**payload)
+        await story_outcome_message(m, state)
+        return
 
     if action == "story_update":
         await state.set_state(StoryUpdate.body)
