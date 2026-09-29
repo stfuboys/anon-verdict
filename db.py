@@ -156,11 +156,24 @@ class DB:
                   value INTEGER NOT NULL DEFAULT 1,
                   PRIMARY KEY(user_id, message_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS growth_events(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL,
+                  event_type TEXT NOT NULL,
+                  source TEXT DEFAULT '',
+                  campaign TEXT DEFAULT '',
+                  story_id INTEGER,
+                  created_at TEXT NOT NULL
+                );
                 """
             )
 
             await self._ensure_column(db, "users", "staff_role", "TEXT DEFAULT ''")
             await self._ensure_column(db, "users", "notifications_enabled", "INTEGER DEFAULT 1")
+            await self._ensure_column(db, "users", "acquisition_source", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "users", "acquisition_campaign", "TEXT DEFAULT ''")
+            await self._ensure_column(db, "users", "acquisition_case_id", "INTEGER")
             await self._ensure_column(db, "stories", "is_demo", "INTEGER DEFAULT 0")
             await self._ensure_column(db, "stories", "status_before_hidden", "TEXT DEFAULT ''")
             await self._ensure_column(db, "stories", "reopened_at", "TEXT DEFAULT ''")
@@ -197,6 +210,10 @@ class DB:
                   ON discussion_messages(reply_to_id);
                 CREATE INDEX IF NOT EXISTS idx_discussion_reactions_message
                   ON discussion_reactions(message_id, value);
+                CREATE INDEX IF NOT EXISTS idx_growth_events_type
+                  ON growth_events(event_type, created_at);
+                CREATE INDEX IF NOT EXISTS idx_growth_events_source
+                  ON growth_events(source, campaign, created_at);
                 """
             )
 
@@ -354,6 +371,92 @@ class DB:
             )
             await db.commit()
             return cur.lastrowid
+
+    async def record_acquisition(self, tg_id, source="", campaign="", case_id=None):
+        source = (source or "").strip().lower()[:32]
+        campaign = (campaign or "").strip().lower()[:64]
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id, acquisition_source FROM users WHERE tg_id=?",
+                (tg_id,),
+            )
+            user = await cur.fetchone()
+            if not user:
+                return False
+
+            if not user["acquisition_source"] and source:
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET acquisition_source=?, acquisition_campaign=?, acquisition_case_id=?
+                    WHERE id=?
+                    """,
+                    (source, campaign, case_id, user["id"]),
+                )
+
+            await db.execute(
+                """
+                INSERT INTO growth_events(user_id, event_type, source, campaign, story_id, created_at)
+                VALUES(?, 'start', ?, ?, ?, ?)
+                """,
+                (user["id"], source, campaign, case_id, now()),
+            )
+            await db.commit()
+            return True
+
+    async def growth_stats(self):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(acquisition_source, ''), 'direct') AS source,
+                    COUNT(*) AS users,
+                    SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM comments c WHERE c.author_id=u.id
+                    ) THEN 1 ELSE 0 END) AS advisers,
+                    SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM stories s WHERE s.author_id=u.id AND s.is_demo=0
+                    ) THEN 1 ELSE 0 END) AS authors
+                FROM users u
+                WHERE u.tg_id != 0
+                GROUP BY COALESCE(NULLIF(acquisition_source, ''), 'direct')
+                ORDER BY users DESC
+                """
+            )
+            by_source = await cur.fetchall()
+
+            cur = await db.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(acquisition_campaign, ''), '—') AS campaign,
+                    COALESCE(NULLIF(acquisition_source, ''), 'direct') AS source,
+                    COUNT(*) AS users,
+                    SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM comments c WHERE c.author_id=u.id
+                    ) THEN 1 ELSE 0 END) AS advisers,
+                    SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM stories s WHERE s.author_id=u.id AND s.is_demo=0
+                    ) THEN 1 ELSE 0 END) AS authors
+                FROM users u
+                WHERE u.tg_id != 0 AND acquisition_campaign != ''
+                GROUP BY acquisition_source, acquisition_campaign
+                ORDER BY users DESC
+                LIMIT 10
+                """
+            )
+            campaigns = await cur.fetchall()
+
+            cur = await db.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN acquisition_source!='' THEN 1 ELSE 0 END) AS attributed
+                FROM users WHERE tg_id != 0
+                """
+            )
+            totals = await cur.fetchone()
+            return {"totals": totals, "sources": by_source, "campaigns": campaigns}
 
     async def set_pending_input(self, tg_id, action, payload):
         async with aiosqlite.connect(self.path) as db:

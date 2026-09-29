@@ -145,3 +145,13 @@ Case authors can manage the lifecycle of their own real cases.
 - advisers, discussion participants, and followers can be notified when a case is completed or receives a final outcome
 - the selected best-answer author keeps the dedicated +5 reputation notification and is excluded from the generic completion notification
 - profiles show completed-case and best-answer counts
+
+
+## Growth v16
+
+- real cases can be shared with Telegram deep links such as `?start=case_17`
+- case deep links open the advertised case immediately after bot start
+- advertising links support `src_<source>_<campaign>` attribution
+- first-touch acquisition source and campaign are stored per user
+- CEO growth analytics show users by source/campaign and conversion into advisers and case authors
+- the case card includes a share action for sending the deep link into Telegram chats
