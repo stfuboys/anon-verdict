@@ -155,3 +155,56 @@ Case authors can manage the lifecycle of their own real cases.
 - first-touch acquisition source and campaign are stored per user
 - CEO growth analytics show users by source/campaign and conversion into advisers and case authors
 - the case card includes a share action for sending the deep link into Telegram chats
+
+## Reliability and community v17
+
+- Fixed case deep links and sharing: native Telegram share URL plus a copy-link button.
+- Best-answer rewards are recorded once per case. Reopening/reselecting a best answer does not award another +5. Existing scores are preserved; current legacy best answers are imported into the award ledger. Previously inflated historical scores cannot be reconstructed reliably and are not reset.
+- SQLite uses WAL, a busy timeout, and immediate transactions for read/modify/write operations. Repeated concurrent likes and first-advice submissions no longer multiply rewards.
+- Menu buttons, commands, and navigation callbacks clear both FSM and pending input. Events for one user are serialized. Bot workflows run in private chats.
+- Drafts survive restarts. Category/title/body are saved as entered; a paginated preview supports editing and explicit publication. Revision checks and a transactional publish prevent stale or duplicate publication. Open the draft from My Cases, Profile, or `/draft`.
+- Long cases show bounded previews with full-text readers. Updates have their own pager, including pages inside a long update. Unicode/emoji budgets are counted conservatively in UTF-16 units.
+- The anonymous case author's staff role is hidden in discussions.
+- Threat-report language is no longer rejected solely for mentioning a threatening word. The local filter remains heuristic; it does not replace moderation. Phone and email detection plus reports remain available.
+- AI reviews include the most recent 20 updates in chronological order and the outcome of a closed case. There are bounded requests, per-user rate limiting, a short content-based cache, and friendly error messages. A changed update invalidates the content cache. `OPENAI_API_KEY` is still required to enable AI; deployment does not purchase or provision API access.
+- The first acquisition source is fixed on the first interaction, including `direct`. Existing users are locked to their known source at migration; previously missing sources are kept as direct rather than inventing historical attribution.
+
+### Moderation and privacy
+
+The CEO assigns `Moderator Anon Verdict` through the existing user card. Moderators open `/moderation` or Profile → Moderation. They can handle reports, hide reported content, mute an offender for 24 hours or 7 days, ban bot access, and remove restrictions they are allowed to remove. Moderators cannot grant roles, see user IDs/usernames in the moderation queue, restrict staff/CEO, or remove a CEO-imposed restriction. The Developer label alone grants no moderation permissions. The CEO can also manage restrictions from user cards and inspect the moderation audit log.
+
+Mute prevents public submissions and ratings while preserving read access. Ban prevents access to the bot. Restrictions are checked server-side. Case content can itself contain identifying details, so authors still need to remove personal information before posting.
+
+### Case notifications
+
+Each real case has a bell button. This preference applies to advice, author updates, outcomes, completion, discussion replies, and helpful/best-answer notifications for that case. The global profile switch remains the master switch. Turning a bell on does not automatically add a case to Favorites; the existing subscription/participation rules determine which events are relevant.
+
+### Backups and restore
+
+The running process holds an exclusive database runtime lock. Before migrations, the bot makes a consistent SQLite online backup and verifies it. It also makes a verified startup snapshot and a snapshot every 6 hours, retaining the latest 28 snapshots by default. Backups have restrictive file permissions and integrity/checksum manifests.
+
+CEO Panel → Backups can create, verify, and download a backup. Snapshots contain private user data. The default backup directory is on the same persistent volume as the database: it protects against software mistakes, not deletion/loss of the entire volume. Keep exported copies in separate private storage, or configure `BACKUP_DIR` on an independently mounted backup disk.
+
+Optional environment settings:
+
+- `BACKUP_DIR`: defaults to the `backups` directory beside `DB_PATH`.
+- `BACKUP_INTERVAL_SECONDS`: defaults to `21600` (6 hours), minimum 300 seconds.
+- `BACKUP_KEEP`: defaults to `28`, minimum 2.
+
+Offline restore (stop the Railway service first):
+
+```sh
+python backups.py verify /app/data/backups/anon-verdict-EXAMPLE.sqlite3
+python backups.py restore /app/data/backups/anon-verdict-EXAMPLE.sqlite3 --db /app/data/anon_verdict.sqlite3
+```
+
+Use the actual database path and exact snapshot filename. Restore verifies the snapshot before changing anything, refuses to run while this bot holds the runtime lock, makes a pre-restore rollback snapshot, checkpoints the old database, and atomically replaces it. Restart the service after restore. Do not overwrite a live `.sqlite3` file with `cp`.
+
+### Regression checks
+
+Dependencies are pinned; production uses Python 3.12. GitHub Actions runs the offline regression suite on Python 3.11 and 3.12 for PRs and changes to main/feature/fix branches. No production token, user database, Telegram request, or paid AI request is used in tests.
+
+```sh
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
