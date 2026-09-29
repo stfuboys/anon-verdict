@@ -1562,12 +1562,13 @@ async def render_rating(message, page=0, edit=True):
 def admin_menu():
     b = InlineKeyboardBuilder()
     b.button(text="📊 Статистика", callback_data="admin:stats")
+    b.button(text="📈 Рост", callback_data="admin:growth")
     b.button(text="🚩 Жалобы", callback_data="admin:reports:0")
     b.button(text="👥 Пользователи", callback_data="admin:users:0")
     b.button(text="🔎 Найти по ID", callback_data="admin:find")
     b.button(text="⚖️ Дела", callback_data="admin:cases:0")
     b.button(text="🏠 Главное меню", callback_data="home")
-    b.adjust(2, 1, 1, 1, 1)
+    b.adjust(2, 1, 1, 1, 1, 1)
     return b.as_markup()
 
 
@@ -1581,6 +1582,51 @@ async def render_admin_home(message, edit=True):
         admin_menu(),
         edit=edit,
     )
+
+
+async def render_growth_analytics(message):
+    stats = await db.growth_stats()
+    totals = stats["totals"]
+    total = int(totals["total"] or 0) if totals else 0
+    attributed = int(totals["attributed"] or 0) if totals else 0
+
+    lines = [
+        "📈 <b>АНАЛИТИКА РОСТА</b>",
+        "",
+        f"👥 Пользователей: <b>{total}</b>",
+        f"🏷 С источником: <b>{attributed}</b>",
+        "",
+        "<b>Источники</b>",
+    ]
+    for row in stats["sources"][:8]:
+        lines.append(
+            f"• {h(row['source'])}: <b>{row['users']}</b> · "
+            f"💬 {row['advisers']} · 📝 {row['authors']}"
+        )
+
+    if stats["campaigns"]:
+        lines.extend(["", "<b>Кампании</b>"])
+        for row in stats["campaigns"][:10]:
+            lines.append(
+                f"• {h(row['source'])}/{h(row['campaign'])}: "
+                f"<b>{row['users']}</b> · 💬 {row['advisers']} · 📝 {row['authors']}"
+            )
+
+    lines.extend([
+        "",
+        "<i>💬 — хотя бы один совет · 📝 — хотя бы одно своё дело</i>",
+        "",
+        "<b>Метки для рекламы</b>",
+        "<code>https://t.me/AnonVerdictBot?start=src_tiktok_video01</code>",
+        "<code>https://t.me/AnonVerdictBot?start=src_reels_video01</code>",
+        "<code>https://t.me/AnonVerdictBot?start=src_tg_channel01</code>",
+    ])
+
+    b = InlineKeyboardBuilder()
+    b.button(text="🔄 Обновить", callback_data="admin:growth")
+    b.button(text="⬅️ CEO Панель", callback_data="admin:home")
+    b.adjust(1)
+    await safe_edit(message, "\n".join(lines), b.as_markup())
 
 
 async def render_admin_reports(message, page=0):
@@ -4063,6 +4109,17 @@ async def admin_stats_callback(c: CallbackQuery):
         f"🚩 Открытых жалоб: <b>{s['reports']}</b>",
         b.as_markup(),
     )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "admin:growth")
+async def admin_growth_callback(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await ensure_callback_user(c)
+    if not is_owner(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await render_growth_analytics(c.message)
     await c.answer()
 
 
