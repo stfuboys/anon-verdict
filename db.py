@@ -1687,6 +1687,7 @@ class DB:
                     """
                     SELECT
                         c.id,
+                        c.author_id,
                         u.tg_id AS author_tg_id,
                         u.nickname AS author_nickname,
                         u.notifications_enabled AS author_notifications
@@ -1704,6 +1705,15 @@ class DB:
                     "UPDATE stories SET status='closed', best_comment_id=? WHERE id=?",
                     (comment_id, sid),
                 )
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET reputation=reputation+5
+                    WHERE id=(SELECT author_id FROM comments WHERE id=?)
+                    """,
+                    (comment_id,),
+                )
+                await self._sync_progress(db, selected["author_id"])
             else:
                 await db.execute(
                     "UPDATE stories SET status='closed', best_comment_id=NULL WHERE id=?",
@@ -1719,6 +1729,7 @@ class DB:
                 result["best_author_tg_id"] = selected["author_tg_id"]
                 result["best_author_nickname"] = selected["author_nickname"]
                 result["best_author_notifications"] = bool(selected["author_notifications"])
+                result["best_reputation_reward"] = 5
             return result
 
     async def change_own_story_status(self, tg_id, sid, target_status):

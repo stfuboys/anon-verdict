@@ -2262,10 +2262,12 @@ async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
     ):
         b = InlineKeyboardBuilder()
         b.button(text="📖 Открыть дело", callback_data=f"case:{sid}:0:all:new")
+        reward = int(result.get("best_reputation_reward") or 0)
         await safe_notify(
             best_author_tg_id,
             "🏆 <b>Автор выбрал твой совет лучшим</b>\n\n"
-            "Дело завершено, а твой ответ отмечен как лучший.",
+            f"Дело завершено, а твой ответ отмечен как лучший.\n"
+            f"⭐ <b>+{reward} репутации</b>",
             b.as_markup(),
         )
 
@@ -2278,7 +2280,7 @@ async def best_answer_choose_callback(c: CallbackQuery, state: FSMContext):
         cat_key=cat_key,
         sort=sort,
     )
-    await c.answer("🏆 Лучший ответ выбран. Дело завершено")
+    await c.answer("🏆 Лучший ответ выбран · автору +5 репутации")
 
 
 @dp.callback_query(F.data.startswith("bn:"))
